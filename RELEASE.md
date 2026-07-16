@@ -30,6 +30,21 @@ goes to `dist/`. `node_modules/node-sqlite3-wasm` is unpacked from the asar
 (`asarUnpack`) because it ships a `.wasm` asset read at runtime, and the example
 extension is shipped under `resources/examples/extensions`.
 
+## Verify the artifact (required — a green test suite is not enough)
+
+After `npm run dist`, run `npm run test:e2e`. `test/e2e/packaged.spec.ts` drives
+the **packaged binary** (it auto-skips when `dist/` is absent) and is the only
+thing that exercises the packaged-only paths the dev-bundle suite cannot reach:
+
+- SQLite WASM loaded from `app.asar.unpacked` (not `node_modules`),
+- the example extension resolved via `process.resourcesPath` (the
+  `app.isPackaged` branch in `src/main/ipc.ts`),
+- forking the extension host child out of a packaged Electron binary,
+- the loopback-only proxy default surviving packaging.
+
+A packaging mistake in any of these ships an app that fails on first use while
+every unit/dev-E2E test stays green. Do not cut a release without this passing.
+
 ## Signing — an explicit operator decision
 
 **Code signing is intentionally NOT configured.** Shipping unsigned artifacts is
@@ -68,9 +83,38 @@ npm run release:prepare      # ci gate + SBOM
 git tag vX.Y.Z && git push --tags   # triggers release.yml (drafts the release)
 ```
 
-`v0.1.0` was cut locally as an **unsigned** tag (no signing certificates on the
-build host); the CI release workflow will produce signed artifacts once the
-secrets above are configured.
+### v0.1.0 — cut UNSIGNED (operator decision, 2026-07-16)
+
+`v0.1.0` was built and tagged locally with **no code signing**, a deliberate
+operator decision recorded here rather than silently shipped. Windows x64
+artifacts, verified against the packaged binary (see above):
+
+| Artifact | SHA-256 |
+|---|---|
+| `GreyNOC Belcher-0.1.0-x64.exe` (NSIS) | `a112539d46e91e19a8643d72c1349c4cc7408c5ce5d9885d850395e961f9e395` |
+| `GreyNOC Belcher-0.1.0-x64.zip` (portable) | `7fe649c96a623116a99ff056c7f4038f0e5e5eff468b2be55bf41f605c002a72` |
+
+Manifest: `dist/SHA256SUMS-windows.txt`. macOS/Linux artifacts were not built on
+this host.
+
+**What unsigned means for anyone installing this build:**
+
+- Windows SmartScreen shows "Windows protected your PC" / unknown publisher;
+  installing requires an explicit *More info → Run anyway*.
+- macOS Gatekeeper blocks the app outright (unsigned + unnotarized).
+- There is **no cryptographic proof of origin or integrity in the binary
+  itself** — the SHA-256 manifest above is the only integrity check, and it is
+  only meaningful if obtained over a channel independent of the artifact.
+
+Verify before running:
+
+```bash
+sha256sum -c SHA256SUMS-windows.txt          # Linux/macOS/Git Bash
+Get-FileHash '.\GreyNOC Belcher-0.1.0-x64.exe' -Algorithm SHA256   # PowerShell
+```
+
+Configure the signing secrets above to have CI produce signed artifacts for the
+next cut.
 
 ## CI
 
