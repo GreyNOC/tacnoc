@@ -1,0 +1,79 @@
+name: Release
+
+# Builds installers on each OS, checksums them, generates an SBOM, and drafts a
+# GitHub release. Triggered by pushing a v* tag. Artifacts are UNSIGNED unless
+# signing secrets are configured (see RELEASE.md) — draft, don't publish, until
+# the operator decides.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Quality gate
+        run: npm run ci
+      - name: Build installers
+        # Code signing activates automatically ONLY when the corresponding
+        # secrets are configured; otherwise electron-builder produces UNSIGNED
+        # artifacts (it does not fail). See RELEASE.md.
+        run: npm run dist
+        env:
+          # Windows Authenticode (set both to enable):
+          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+          # macOS Developer ID + notarization (set all to enable):
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Checksums
+        run: npm run checksums
+      - name: SBOM
+        run: npm run sbom
+      - name: Report signing status
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.WINDOWS_CSC_LINK }}${{ secrets.APPLE_ID }}" ]; then
+            echo "Signing secrets present — artifacts should be signed. Verify before publishing."
+          else
+            echo "::warning::No signing secrets configured — artifacts are UNSIGNED. The release is left as a draft."
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.os }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.zip
+            dist/*.AppImage
+            dist/*.tar.gz
+            dist/SHA256SUMS.txt
+            sbom.json
+
+  draft-release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+      - name: Draft GitHub release (unsigned — review before publishing)
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: release/**/*

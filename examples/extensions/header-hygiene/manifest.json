@@ -1,0 +1,9 @@
+{
+  "id": "header-hygiene",
+  "name": "Header Hygiene (example)",
+  "version": "1.0.0",
+  "description": "Harmless example extension: flags an X-Debug response header, adds a ROT13 transform, counts sanitized traffic, and provides a read-only header-summary tab.",
+  "author": "GreyNOC",
+  "sdkVersion": "1.0.0",
+  "permissions": ["passive-checks", "transforms", "read-traffic", "ui-tabs"]
+}

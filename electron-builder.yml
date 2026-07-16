@@ -1,0 +1,61 @@
+# electron-builder packaging configuration.
+#
+# Build with: npm run dist   (runs `npm run build` first)
+# Note: signing is intentionally NOT configured here. Per the GreyNOC release
+# policy, shipping UNSIGNED artifacts is a decision for the operator — configure
+# code signing (CSC_LINK / identity) before public distribution, or ship
+# checksummed-only builds knowingly. See RELEASE.md.
+
+appId: com.greynoc.belcher
+productName: GreyNOC Belcher
+copyright: GreyNOC (authorized security research)
+
+directories:
+  output: dist
+  buildResources: build
+
+# The Electron main entry comes from package.json "main" (out/main/index.js),
+# so the app must be built (electron-vite build) before packaging.
+files:
+  - out/**/*
+  - package.json
+  - '!**/*.map'
+
+# The example extension is read from disk at runtime (process.resourcesPath).
+extraResources:
+  - from: examples/extensions
+    to: examples/extensions
+
+# node-sqlite3-wasm ships a .wasm asset loaded at runtime; it must live outside
+# the asar archive so it can be read from the filesystem.
+asarUnpack:
+  - node_modules/node-sqlite3-wasm/**
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: zip
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+    - target: zip
+  # hardenedRuntime + notarization require an Apple identity; enable when signing.
+
+linux:
+  category: Development
+  target:
+    - AppImage
+    - tar.gz
+
+# Emit a per-build metadata file listing produced artifacts.
+artifactBuildCompleted: null

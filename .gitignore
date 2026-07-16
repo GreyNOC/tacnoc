@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+out/
+dist/
+dist-electron/
+build/
+*.tsbuildinfo
+
+# Generated release artifacts
+sbom.json
+
+# Test / coverage
+coverage/
+playwright-report/
+test-results/
+.vitest/
+
+# Local project data & secrets (never commit captured traffic or CA keys)
+*.gnbproj
+projects/
+*.pem
+*.key
+*.crt
+ca-store/
+!test/**/fixtures/**
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
