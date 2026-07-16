@@ -83,15 +83,19 @@ function load(manifest, source, granted) {
   const mod = sandbox.module.exports;
   const activate = (mod && mod.activate) || sandbox.exports.activate;
   if (typeof activate !== 'function') throw new Error('extension ' + manifest.id + ' does not export an activate(belcher) function');
+  // Snapshot the registries so a failed activate rolls back ONLY the delta it
+  // added (not another extension's live registrations that share an id).
+  const checksLen = checks.length;
+  const tKeys = new Set(Object.keys(transforms));
+  const tabKeys = new Set(Object.keys(tabs));
+  const actKeys = new Set(Object.keys(actions));
   try {
     activate(api);
   } catch (e) {
-    // Roll back any partial registrations so a failed activate leaves no
-    // orphaned checks/transforms/tabs/actions running on later scans.
-    for (var i = checks.length - 1; i >= 0; i--) if (checks[i].extId === ext.id) checks.splice(i, 1);
-    for (const k of Object.keys(transforms)) if (transforms[k].extId === ext.id) delete transforms[k];
-    for (const k of Object.keys(tabs)) if (tabs[k].extId === ext.id) delete tabs[k];
-    for (const k of Object.keys(actions)) if (actions[k].extId === ext.id) delete actions[k];
+    checks.length = checksLen;
+    for (const k of Object.keys(transforms)) if (!tKeys.has(k)) delete transforms[k];
+    for (const k of Object.keys(tabs)) if (!tabKeys.has(k)) delete tabs[k];
+    for (const k of Object.keys(actions)) if (!actKeys.has(k)) delete actions[k];
     throw e;
   }
   extensions.push(ext);
@@ -107,11 +111,15 @@ function load(manifest, source, granted) {
 }
 
 function runChecks(exchange, requestBodyText, responseBodyText) {
-  const ctx = { exchange: exchange, requestBodyText: requestBodyText, responseBodyText: responseBodyText, redactor: redactorShim };
   const raw = [];
   for (const c of checks) {
     try {
-      if (c.appliesTo && !c.appliesTo(exchange)) continue;
+      // Give each check its OWN copy of the exchange so one check cannot mutate
+      // state observed by later checks (even in appliesTo).
+      let view = exchange;
+      try { view = structuredClone(exchange); } catch (_e) { view = exchange; }
+      const ctx = { exchange: view, requestBodyText: requestBodyText, responseBodyText: responseBodyText, redactor: redactorShim };
+      if (c.appliesTo && !c.appliesTo(view)) continue;
       const results = c.run(ctx) || [];
       for (const r of results) raw.push({ extId: c.extId, module: 'ext:' + c.extId + ':' + c.module, version: c.version, finding: r });
     } catch (e) {

@@ -63,9 +63,16 @@ real defects, all now fixed with regression tests.
 ## Not changed (documented residual risk)
 
 - The **inner `vm`** used for extensions is escapable via prototype-chain tricks
-  on objects passed into the context. This was never claimed as the boundary: the
-  boundary is the **worker thread** (separate heap, message-only bridge), which a
-  `vm` escape cannot cross to reach host objects/secrets. A worker still has Node
-  built-ins, so this remains "trusted-extensions-only," documented in
-  THREAT_MODEL.md and docs/extension-sdk.md. An OS-sandboxed subprocess is the
-  planned next step.
+  on objects passed into the context. This was never claimed as the boundary: at
+  the time of this ADR the boundary was the **worker thread** (separate heap,
+  message-only bridge), which a `vm` escape cannot cross to reach host
+  objects/secrets.
+
+  > **Superseded by ADR 0006.** The "OS-sandboxed subprocess is the planned next
+  > step" noted here has since been implemented: extensions now run in a
+  > dedicated **child process** (not a worker thread), a materially stronger
+  > boundary. Items 7–9 above (worker rollback, immediate `createFinding`, RPC
+  > timeout) were carried over to and further hardened in the subprocess host.
+  > See ADR 0006 for the current model and the M11c review that hardened it.
+  > "Trusted-extensions-only" still stands (not a kernel sandbox); documented in
+  > THREAT_MODEL.md and docs/extension-sdk.md.

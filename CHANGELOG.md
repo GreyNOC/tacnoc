@@ -64,6 +64,22 @@ web-application security research.
   the WS retrieval limit above the capture ceiling; roll back a failed
   extension's registrations; RPC timeout for a hung extension.
 
+### Security — subprocess extension host + second review (ADR 0006)
+
+- **Process-isolated extension host**: extensions run in a dedicated child
+  process (scrubbed env, bounded heap, IPC-only bridge, inner `vm`) instead of a
+  worker thread — an escape can no longer reach the host's engine, secrets, DB,
+  or CA.
+- Fail-closed on child crash (drop all extension capabilities + loud error);
+  `dispose()` wired to app quit terminates the child and its temp bootstrap dir
+  (no per-launch leak).
+- Second adversarial-review round hardening: single-settle `ready` (no unhandled
+  rejection), delta-scoped activate rollback + duplicate-id guard, per-check
+  `structuredClone` of the exchange, malformed-IPC/finding survival with
+  defensive field coercion, signal-kill-safe `terminate()`.
+- Release: per-OS `SHA256SUMS-<os>.txt` (no upload collision); SBOM generated
+  once; checksum manifest narrowed to distributed installers/archives only.
+
 ### Packaging & release (ADR 0004/M10)
 
 - electron-builder config (WASM `asarUnpack`, example extension in resources),
@@ -79,7 +95,9 @@ web-application security research.
 ### Known limitations
 
 - HTTP/3 / QUIC interception not implemented (clients fall back to h2/h1).
-- Extension isolation is worker+`vm` (not an OS-level sandbox).
+- Extension isolation is a dedicated child process + inner `vm` (a materially
+  stronger boundary than a worker thread, but not yet an OS-level sandbox such as
+  seccomp / AppContainer / `sandbox-exec`).
 - At-rest encryption covers content, not searchable metadata.
 
 [Unreleased]: https://example.invalid/greynoc/belcher/compare/v0.1.0...HEAD

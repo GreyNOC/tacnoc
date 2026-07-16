@@ -94,7 +94,7 @@ npm run format         # prettier --write
 npm run ci             # format:check + lint + typecheck + test
 npm run sbom           # generate CycloneDX sbom.json
 npm run dist           # build installers (electron-builder) → dist/
-npm run checksums      # write dist/SHA256SUMS.txt
+npm run checksums      # write dist/SHA256SUMS-<os>.txt
 ```
 
 Packaging and the release runbook (SBOM, checksums, signing decision, CI) are in

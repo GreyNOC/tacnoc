@@ -43,6 +43,10 @@ jobs:
       - name: Checksums
         run: npm run checksums
       - name: SBOM
+        # The SBOM is derived only from package-lock.json (identical on every OS),
+        # so generate + upload it once — on Linux — to avoid three colliding
+        # sbom.json copies in the flattened release upload.
+        if: matrix.os == 'ubuntu-latest'
         run: npm run sbom
       - name: Report signing status
         shell: bash
@@ -55,13 +59,15 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: artifacts-${{ matrix.os }}
+          # SHA256SUMS-<os>.txt is per-OS by design (avoids a basename collision
+          # when all three legs are downloaded into one flat release set).
           path: |
             dist/*.exe
             dist/*.dmg
             dist/*.zip
             dist/*.AppImage
             dist/*.tar.gz
-            dist/SHA256SUMS.txt
+            dist/SHA256SUMS-*.txt
             sbom.json
 
   draft-release:

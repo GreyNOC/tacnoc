@@ -31,6 +31,15 @@ async function withHost<T>(fn: (host: ExtensionHost) => Promise<T>): Promise<T> 
   }
 }
 
+/** Poll `cond` until it is true, or throw after `timeoutMs`. */
+async function waitFor(cond: () => boolean, timeoutMs = 4000): Promise<void> {
+  const start = Date.now();
+  while (!cond()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitFor: condition not met in time');
+    await new Promise((r) => setTimeout(r, 15));
+  }
+}
+
 function exchangeWith(headers: { name: string; value: string }[]): HttpExchange {
   return {
     id: crypto.randomUUID(),
@@ -188,6 +197,113 @@ describe('extension SDK host (isolated worker)', () => {
         '',
       );
       expect(findings.some((f) => f.title.includes('B-ORPHAN'))).toBe(false);
+    });
+  });
+
+  it('rejects a second extension that reuses an already-loaded id (keeps the first intact)', async () => {
+    await withHost(async (host) => {
+      await host.load(manifest, source, manifest.permissions);
+      const checksBefore = host.getCheckModules().length;
+
+      await expect(host.load(manifest, source, manifest.permissions)).rejects.toThrow(
+        /already loaded/i,
+      );
+
+      // The first extension's registrations are untouched and still work.
+      expect(host.listExtensions()).toHaveLength(1);
+      expect(host.getCheckModules().length).toBe(checksBefore);
+      expect(await host.applyTransform('ext.header-hygiene.rot13', 'Hello')).toBe('Uryyb');
+    });
+  });
+
+  it('ignores a malformed createFinding payload without crashing the host', async () => {
+    const collected: { title: string }[] = [];
+    const host = new ExtensionHost(REDACTION, undefined, (f) => collected.push(f));
+    try {
+      const finderManifest: ExtensionManifest = {
+        id: 'finder-ext',
+        name: 'Finder',
+        version: '1.0.0',
+        description: '',
+        sdkVersion: '1.0.0',
+        permissions: ['read-traffic', 'findings'],
+      };
+      // The handler emits a garbage finding (must be ignored) then a valid one.
+      const finderSource =
+        'module.exports = { activate: function(b){' +
+        '  b.onTraffic(function(){' +
+        '    b.createFinding(42);' +
+        '    b.createFinding(null);' +
+        '    b.createFinding({ dedupeKey:"k", title:"REAL-FINDING", severity:"low",' +
+        '      confidence:"firm", description:"d", remediation:"r", evidence:[] });' +
+        '  });' +
+        '} };';
+      await host.load(finderManifest, finderSource, ['read-traffic', 'findings']);
+      host.dispatchTraffic(exchangeWith([{ name: 'Content-Type', value: 'text/plain' }]));
+
+      await waitFor(() => collected.some((f) => f.title === 'REAL-FINDING'));
+      expect(collected.some((f) => f.title === 'REAL-FINDING')).toBe(true);
+      // The host survived the malformed payloads and still answers RPCs.
+      expect(host.pid()).toBeGreaterThan(0);
+    } finally {
+      await host.terminate();
+    }
+  });
+
+  it('materializes an extension finding with out-of-range fields to safe defaults', async () => {
+    const collected: { severity: string; confidence: string; title: string }[] = [];
+    const host = new ExtensionHost(REDACTION, undefined, (f) =>
+      collected.push({ severity: f.severity, confidence: f.confidence, title: f.title }),
+    );
+    try {
+      const m: ExtensionManifest = {
+        id: 'coerce-ext',
+        name: 'Coerce',
+        version: '1.0.0',
+        description: '',
+        sdkVersion: '1.0.0',
+        permissions: ['read-traffic', 'findings'],
+      };
+      const src =
+        'module.exports = { activate: function(b){' +
+        '  b.onTraffic(function(){' +
+        '    b.createFinding({ dedupeKey:"k", title:"COERCE", severity:"OMEGA",' +
+        '      confidence:"absolute", description:"d", remediation:"r", evidence:"not-an-array" });' +
+        '  });' +
+        '} };';
+      await host.load(m, src, ['read-traffic', 'findings']);
+      host.dispatchTraffic(exchangeWith([{ name: 'Content-Type', value: 'text/plain' }]));
+
+      await waitFor(() => collected.some((f) => f.title === 'COERCE'));
+      const f = collected.find((x) => x.title === 'COERCE')!;
+      expect(f.severity).toBe('info'); // invalid 'OMEGA' -> default
+      expect(f.confidence).toBe('tentative'); // invalid 'absolute' -> default
+    } finally {
+      await host.terminate();
+    }
+  });
+
+  it('fails closed — drops all extension capabilities when the child process dies', async () => {
+    await withHost(async (host) => {
+      await host.load(manifest, source, manifest.permissions);
+      expect(host.hasExtensionChecks()).toBe(true);
+      expect(host.getTransforms().length).toBeGreaterThan(0);
+
+      // Simulate a crash: kill the isolated child out from under the host.
+      const pid = host.pid();
+      expect(typeof pid).toBe('number');
+      process.kill(pid!, 'SIGKILL');
+
+      await waitFor(() => !host.hasExtensionChecks());
+      expect(host.hasExtensionChecks()).toBe(false);
+      expect(host.getTransforms()).toHaveLength(0);
+      expect(host.getCheckModules()).toHaveLength(0);
+
+      // Calls now reject fast (fail-closed) instead of hanging.
+      await expect(host.applyTransform('ext.header-hygiene.rot13', 'x')).rejects.toThrow();
+      await expect(
+        host.runChecks(exchangeWith([{ name: 'Content-Type', value: 'text/plain' }]), '', ''),
+      ).resolves.toEqual([]);
     });
   });
 });

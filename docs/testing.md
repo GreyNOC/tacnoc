@@ -54,7 +54,7 @@ uses a throwaway self-signed cert (`test/server/selfSignedCert.ts`).
 | WebSocket frame parsing (mask/fragment/control/oversize) | `wsFrame.test.ts` |
 | WebSocket frame capture through the proxy (both directions) | `proxy.test.ts` |
 | End-to-end capture → scan → findings via the app facade | `session.test.ts` |
-| Extension SDK + worker isolation (blocks `require`) | `sdk.test.ts` |
+| Extension SDK + process isolation (separate PID, no `process`/`require` in `vm`, same-id guard, rollback, fail-closed on child death, malformed-finding survival) | `sdk.test.ts` |
 | Real Electron app: boot, create project, proxy, all views | `e2e/smoke.spec.ts`, `e2e/full.spec.ts` |
 
 ## Runtime parity (important)

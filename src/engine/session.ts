@@ -156,6 +156,18 @@ export class BelcherSession extends EventEmitter {
     this.variation = undefined;
   }
 
+  /**
+   * Tear the session down for good: stop the proxy, close the project, and
+   * terminate the extension host child process (freeing its temp bootstrap
+   * dir). The extension host lives for the whole session — NOT per project —
+   * so it is only killed here, at app shutdown. Idempotent.
+   */
+  async dispose(): Promise<void> {
+    await this.closeProject();
+    await this.extHost.terminate();
+    this.removeAllListeners();
+  }
+
   private requireProject(): ProjectStore {
     if (!this.project) throw new Error('No project is open. Create or open a project first.');
     return this.project;

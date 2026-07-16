@@ -78,11 +78,17 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  void session.closeProject().finally(() => {
-    if (process.platform !== 'darwin') app.quit();
-  });
+  if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
+// Full, ordered shutdown: stop automated work, close the project, and terminate
+// the isolated extension child process (freeing its temp bootstrap dir). dispose()
+// is async, so hold the quit until it completes, then let the quit proceed.
+let quitting = false;
+app.on('before-quit', (event) => {
+  if (quitting) return;
+  event.preventDefault();
+  quitting = true;
   session.emergencyStop();
+  void session.dispose().finally(() => app.quit());
 });

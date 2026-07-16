@@ -106,6 +106,7 @@ export class ExtensionHost {
   private actionsMeta: { extensionId: string; id: string; label: string }[] = [];
   private trafficSubscribers = 0;
   private terminating = false;
+  private dead = false;
 
   constructor(
     redaction: RedactionConfig,
@@ -130,50 +131,97 @@ export class ExtensionHost {
     });
     // Don't let the extension process keep the parent alive on shutdown.
     this.child.unref();
-    this.child.on('error', (err) =>
-      this.log.error('extension host process error', { err: String(err) }),
-    );
+
+    let resolveReady!: () => void;
+    let rejectReady!: (err: Error) => void;
+    let readySettled = false;
+    this.ready = new Promise<void>((res, rej) => {
+      resolveReady = () => {
+        readySettled = true;
+        res();
+      };
+      rejectReady = (err: Error) => {
+        readySettled = true;
+        rej(err);
+      };
+    });
+    // Never let an unconsumed `ready` become an unhandled rejection; awaiters
+    // still receive the rejection from their own `await this.ready`.
+    this.ready.catch(() => {});
+
+    this.child.on('error', (err) => {
+      this.log.error('extension host process error', { err: String(err) });
+      if (!readySettled) rejectReady(err instanceof Error ? err : new Error(String(err)));
+    });
     this.child.on('exit', (code) => {
-      if (code !== 0 && code !== null && !this.terminating) {
-        this.log.warn('extension host process exited', { code });
-      }
+      this.dead = true;
+      if (!readySettled) rejectReady(new Error('extension host process exited before ready'));
       for (const p of this.pending.values()) p.reject(new Error('extension host process exited'));
       this.pending.clear();
+      if (!this.terminating) {
+        // Unexpected death: LOUDLY drop all extension capabilities so the app
+        // never silently advertises checks/transforms that can no longer run
+        // (fail-closed, not a silent detection bypass). Re-fork on demand is
+        // future work; for now the operator sees the error and can reload.
+        this.log.error(
+          'extension host process crashed — extension features disabled until reload',
+          {
+            code,
+          },
+        );
+        this.extensions.length = 0;
+        this.checksMeta = [];
+        this.transformsMeta = [];
+        this.tabsMeta = [];
+        this.actionsMeta = [];
+        this.trafficSubscribers = 0;
+      }
     });
-    let resolveReady!: () => void;
-    this.ready = new Promise<void>((r) => (resolveReady = r));
     this.child.on('message', (m) => this.onMessage(m as Record<string, unknown>, resolveReady));
   }
 
   private onMessage(m: Record<string, unknown>, resolveReady: () => void): void {
-    const type = m.type as string;
-    if (type === 'ready') {
-      resolveReady();
-      return;
-    }
-    if (type === 'log') {
-      const level = (m.level as 'info' | 'warn' | 'error') ?? 'info';
-      this.log[level](String(m.msg));
-      return;
-    }
-    if (type === 'finding') {
-      // A createFinding() call (from a check or an onTraffic handler).
-      const extId = String(m.extId ?? 'unknown');
-      const f = m.finding as RawExtFinding['finding'] & { exchangeId?: string };
-      const finding = this.materialize(String(f.exchangeId ?? ''), `ext:${extId}`, '1.0.0', f);
-      try {
-        this.onFinding?.(finding);
-      } catch (err) {
-        this.log.warn('onFinding sink threw', { err: String(err) });
+    // The child is untrusted; a malformed message must NEVER throw out of this
+    // IPC listener (that would crash the host process).
+    try {
+      const type = m?.type as string;
+      if (type === 'ready') {
+        resolveReady();
+        return;
       }
-      return;
+      if (type === 'log') {
+        const level = (m.level as 'info' | 'warn' | 'error') ?? 'info';
+        if (level === 'info' || level === 'warn' || level === 'error')
+          this.log[level](String(m.msg));
+        return;
+      }
+      if (type === 'finding') {
+        // A createFinding() call (from a check or an onTraffic handler).
+        const extId = String(m.extId ?? 'unknown');
+        const f = m.finding;
+        if (!f || typeof f !== 'object') return;
+        const finding = this.materialize(
+          String((f as { exchangeId?: unknown }).exchangeId ?? ''),
+          `ext:${extId}`,
+          '1.0.0',
+          f as RawExtFinding['finding'],
+        );
+        try {
+          this.onFinding?.(finding);
+        } catch (err) {
+          this.log.warn('onFinding sink threw', { err: String(err) });
+        }
+        return;
+      }
+      const reqId = m?.reqId as number | undefined;
+      if (reqId === undefined) return;
+      const p = this.pending.get(reqId);
+      if (!p) return;
+      this.pending.delete(reqId);
+      p.resolve(m);
+    } catch (err) {
+      this.log.warn('malformed extension message ignored', { err: String(err) });
     }
-    const reqId = m.reqId as number | undefined;
-    if (reqId === undefined) return;
-    const p = this.pending.get(reqId);
-    if (!p) return;
-    this.pending.delete(reqId);
-    p.resolve(m);
   }
 
   private call<T = Record<string, unknown>>(
@@ -181,6 +229,9 @@ export class ExtensionHost {
     timeoutMs = 5000,
   ): Promise<T> {
     const reqId = ++this.seq;
+    if (this.dead || !this.child.connected) {
+      return Promise.reject(new Error('extension host process is not running'));
+    }
     return new Promise<T>((resolve, reject) => {
       // A misbehaving extension can run an infinite loop the child process
       // cannot interrupt; time out the RPC so it never blocks the caller (e.g.
@@ -206,6 +257,11 @@ export class ExtensionHost {
   /** Load an extension into the child process with the user-approved permissions. */
   async load(manifest: ExtensionManifest, source: string, granted: Permission[]): Promise<void> {
     await this.ready;
+    // Reject a duplicate id: ids are the rollback key in the child, so loading
+    // two extensions with the same id could wipe the first's registrations.
+    if (this.extensions.some((e) => e.manifest.id === manifest.id)) {
+      throw new Error(`extension id "${manifest.id}" is already loaded`);
+    }
     const grantedSet = granted.filter((p) => manifest.permissions.includes(p));
     const missingElevated = manifest.permissions
       .filter((p) => ELEVATED_PERMISSIONS.has(p))
@@ -275,20 +331,33 @@ export class ExtensionHost {
     version: string,
     f: RawExtFinding['finding'],
   ): Finding {
+    // `f` may be malformed (extension-supplied); coerce every field defensively.
+    const sev: Finding['severity'] = ['info', 'low', 'medium', 'high', 'critical'].includes(
+      f?.severity as string,
+    )
+      ? f.severity
+      : 'info';
+    const conf: Finding['confidence'] = ['tentative', 'firm', 'certain'].includes(
+      f?.confidence as string,
+    )
+      ? f.confidence
+      : 'tentative';
+    const evidence = Array.isArray(f?.evidence) ? f.evidence : [];
     return {
       id: crypto.randomUUID(),
       exchangeId,
-      dedupeKey: `${module}|${f.dedupeKey}`,
-      title: f.title,
-      severity: f.severity,
-      confidence: f.confidence,
+      dedupeKey: `${module}|${String(f?.dedupeKey ?? '')}`,
+      title: String(f?.title ?? '(untitled finding)'),
+      severity: sev,
+      confidence: conf,
       module,
       moduleVersion: version,
-      description: f.description,
-      remediation: f.remediation,
-      evidence: (f.evidence ?? []).map((e) => ({
-        ...e,
-        excerpt: this.redactor.redactText(e.excerpt),
+      description: String(f?.description ?? ''),
+      remediation: String(f?.remediation ?? ''),
+      evidence: evidence.map((e) => ({
+        location: (e?.location ?? 'response-body') as Finding['evidence'][number]['location'],
+        excerpt: this.redactor.redactText(String(e?.excerpt ?? '')),
+        ...(e?.field ? { field: String(e.field) } : {}),
       })),
       createdAt: Date.now(),
       suppressed: false,
@@ -344,7 +413,10 @@ export class ExtensionHost {
   async terminate(): Promise<void> {
     this.terminating = true;
     const exited = new Promise<void>((resolve) => {
-      if (!this.child.connected && this.child.exitCode !== null) return resolve();
+      // Already gone? `dead` is set by the exit handler for BOTH a normal exit
+      // and a signal kill (where exitCode stays null) — checking it avoids a
+      // hang waiting for an 'exit' that already fired and won't fire again.
+      if (this.dead || (!this.child.connected && this.child.exitCode !== null)) return resolve();
       this.child.once('exit', () => resolve());
       // Ask nicely, then force-kill shortly after.
       try {

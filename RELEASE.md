@@ -22,7 +22,7 @@ drafted (not auto-published) release.
 
 ```bash
 npm run dist        # builds the app, then electron-builder → dist/
-npm run checksums   # writes dist/SHA256SUMS.txt
+npm run checksums   # writes dist/SHA256SUMS-<os>.txt (per-OS: windows/macos/linux)
 ```
 
 Build on each target OS (or via the `release.yml` GitHub Actions matrix). Output
@@ -83,5 +83,6 @@ secrets above are configured.
 ## Reproducibility
 
 - `package-lock.json` pins the dependency tree; CI uses `npm ci`.
-- `sbom.json` and `SHA256SUMS.txt` accompany each release for verification.
+- `sbom.json` and per-OS `SHA256SUMS-<os>.txt` manifests accompany each release
+  for verification.
 - No native build step is required (SQLite is WASM; the CA is pure JS).

@@ -55,7 +55,7 @@ the trust boundaries a reviewer should audit. It is a living document.
 | CA key disclosure | OS secure storage; file fallback clearly marked non-secure |
 | Captured content readable off-disk | Bodies + headers AES-256-GCM encrypted at rest under a per-project key in OS secure storage (GCM detects tampering); blob ids are keyed HMACs, not plaintext hashes, so there is no known-plaintext confirmation oracle |
 | Proxy DoS via client-controlled TLS SNI | Per-host leaf-cert cache is LRU-bounded so unique SNIs cannot exhaust memory/CPU |
-| Extension reaching host internals | Extensions run in an isolated worker thread with an RPC-only bridge (no shared references) + inner `vm`; a hung extension is bounded by an RPC timeout |
+| Extension reaching host internals | Extensions run in a dedicated child PROCESS (scrubbed env, bounded heap) with an IPC-only bridge (no shared references) + inner `vm`; a full escape reaches only the child, not the host engine/secrets/DB/CA; a hung extension is bounded by an RPC timeout; the host fails closed (drops all extension capabilities) if the child dies |
 
 ## Out of scope / residual risks
 
