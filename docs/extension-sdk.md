@@ -34,8 +34,11 @@ It ships with a `manifest.json`:
 ## Permissions (capabilities)
 
 The host injects **only** the API methods the manifest declares *and* the user
-approved. There is no permission that grants filesystem, process, network, or
-secret access — extensions cannot obtain those through the SDK.
+approved. No permission grants filesystem, process, network, or secret access
+through the SDK. This is a capability *grant* boundary, not a sandbox guarantee:
+the child process itself has ambient Node built-ins (see *Isolation model* below),
+so the real protections are the OS process boundary and the redaction of every
+exchange handed to an extension — not the absence of these API methods.
 
 | Permission | Grants | Elevated? |
 |---|---|---|
@@ -47,6 +50,11 @@ secret access — extensions cannot obtain those through the SDK.
 | `context-menu` | `belcher.registerContextMenuAction(a)` | |
 
 `belcher.log(msg)` is always available and writes to the redacted local log.
+
+> **Note:** `ui-tabs` and `context-menu` registrations are accepted and validated
+> by the host, but the desktop UI does not yet render editor tabs or context-menu
+> actions — they are inert until that surface lands. `passive-checks`,
+> `transforms`, `read-traffic`, and `findings` are fully wired end-to-end.
 
 ## Isolation model — and its limits
 
@@ -62,8 +70,9 @@ bridge — the extension never receives a reference to any host object (engine,
 session, secrets, DB), and it lives in a **separate OS memory space**, so even a
 full escape cannot read host-process memory. Inside the child, each extension is
 *additionally* evaluated in a Node `vm` context that exposes only the `belcher`
-API and a minimal `console`, with no `require`/`process`/`module` in scope and a
-time-boxed top-level evaluation.
+API and a minimal `console`, with no `require`/`process`/`module` in scope,
+in-context code generation (`eval`/`new Function`) disabled, and a time-boxed
+top-level evaluation.
 
 Passive checks and transforms execute in the child and are invoked by the host
 via async RPC (with a timeout so a hung extension can't block the scan pipeline);
@@ -83,8 +92,11 @@ explicit approval.
 `onTraffic` handlers receive redacted metadata only — method, URL (sensitive
 query params redacted), redacted request/response headers, status, and MIME.
 Bodies are intentionally not included. Passive checks registered via
-`registerScannerCheck` run inside the scanner and see the exchange text needed to
-detect issues; their **evidence is re-redacted** by the runner before storage.
+`registerScannerCheck` also receive a **redacted** exchange: request/response
+headers and the URL are passed through the redactor and body text is redacted
+before it crosses into the child, so the non-elevated `passive-checks` permission
+never sees more raw secret material than the sanitized `read-traffic` path. Their
+**evidence is re-redacted** by the runner before storage.
 
 ## Example extension
 

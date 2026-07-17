@@ -27,6 +27,8 @@ export function HistoryView(): JSX.Element {
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<ExchangeDetail | undefined>(undefined);
   const [wsMessages, setWsMessages] = useState<WsMessage[]>([]);
+  const [notesDraft, setNotesDraft] = useState('');
+  const [tagsDraft, setTagsDraft] = useState('');
 
   const [text, setText] = useState('');
   const [method, setMethod] = useState('');
@@ -72,8 +74,26 @@ export function HistoryView(): JSX.Element {
     });
   }, [selected, detail]);
 
+  // Keep the notes/tags editor in sync with the selected exchange.
+  useEffect(() => {
+    setNotesDraft(detail?.notes ?? '');
+    setTagsDraft((detail?.tags ?? []).join(', '));
+  }, [detail]);
+
   const sendToRepeater = (): void => {
     if (detail) s.seedRepeater(detailToRaw(detail));
+  };
+
+  const saveNotesTags = async (): Promise<void> => {
+    if (!selected) return;
+    const tags = tagsDraft
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    await api.updateNotesTags(selected, notesDraft.trim() ? notesDraft : null, tags);
+    const d = await api.getExchangeDetail(selected);
+    setDetail(d);
+    s.setToast('Notes and tags saved.');
   };
 
   return (
@@ -188,6 +208,25 @@ export function HistoryView(): JSX.Element {
               Send to Repeater →
             </button>
           </div>
+          {detail && (
+            <div className="row" style={{ gap: 8, padding: '6px 10px', flexWrap: 'wrap' }}>
+              <input
+                style={{ flex: 2, minWidth: 160 }}
+                placeholder="Notes for this exchange…"
+                value={notesDraft}
+                onChange={(e) => setNotesDraft(e.target.value)}
+                aria-label="Exchange notes"
+              />
+              <input
+                style={{ flex: 1, minWidth: 120 }}
+                placeholder="tags (comma-separated)"
+                value={tagsDraft}
+                onChange={(e) => setTagsDraft(e.target.value)}
+                aria-label="Exchange tags"
+              />
+              <button onClick={saveNotesTags}>Save notes/tags</button>
+            </div>
+          )}
           <div className="split h" style={{ flex: 1 }}>
             <MessageViewer
               title="Request"

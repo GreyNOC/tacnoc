@@ -72,15 +72,33 @@ const HTML_ENCODE_MAP: Record<string, string> = {
 export function htmlEncode(input: string): string {
   return input.replace(/[&<>"']/g, (c) => HTML_ENCODE_MAP[c] as string);
 }
+const HTML_NAMED_DECODE: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+};
 export function htmlDecode(input: string): string {
-  return input
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#0*39;|&#x0*27;|&apos;/gi, "'")
-    .replace(/&#(\d+);/g, (_m, d: string) => String.fromCodePoint(Number(d)))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_m, h: string) => String.fromCodePoint(parseInt(h, 16)));
+  // SINGLE left-to-right pass: `.replace` never re-scans the text it substitutes,
+  // so decoding "&amp;lt;" yields "&lt;" (a correct inverse of htmlEncode) rather
+  // than "<" from a second pass over the emitted "&". Numeric references are
+  // bounds-checked so out-of-range/surrogate code points degrade to U+FFFD
+  // instead of throwing a RangeError on malformed input.
+  return input.replace(
+    /&(#[xX][0-9a-fA-F]+|#\d+|amp|lt|gt|quot|apos);/g,
+    (m: string, body: string): string => {
+      if (body[0] === '#') {
+        const cp =
+          body[1] === 'x' || body[1] === 'X' ? parseInt(body.slice(2), 16) : Number(body.slice(1));
+        if (!Number.isFinite(cp) || cp < 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) {
+          return '�';
+        }
+        return String.fromCodePoint(cp);
+      }
+      return HTML_NAMED_DECODE[body] ?? m;
+    },
+  );
 }
 
 // --- Hashes ---

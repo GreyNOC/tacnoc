@@ -196,6 +196,16 @@ export class ProjectStore {
       }
       if (offset + page.rows.length >= page.total || page.rows.length === 0) break;
     }
+    // Page through ALL captured WebSocket messages so a WS-heavy project exports
+    // in full (payloads are returned decrypted here and re-encrypted on import).
+    const websockets: import('../../shared/websocket.js').WsMessage[] = [];
+    const wsTotal = this.wsMessages.countAll();
+    for (let offset = 0; offset < wsTotal; offset += pageSize) {
+      const page = this.wsMessages.listAll(pageSize, offset);
+      if (page.length === 0) break;
+      websockets.push(...page);
+    }
+
     const info = this.info;
     if (!info) throw new Error('project has no info record');
     return {
@@ -210,6 +220,7 @@ export class ProjectStore {
       suppressions: this.findings.listSuppressions(),
       savedRequests: this.listSavedRequests(),
       audit: this.audit.list(5000),
+      websockets,
     };
   }
 
@@ -261,6 +272,22 @@ export class ProjectStore {
     for (const s of exported.suppressions) store.findings.addSuppression(s);
     for (const r of exported.savedRequests) store.saveRequest(r);
     for (const a of exported.audit) store.audit.append(a);
+    // Restore captured WebSocket frames (older exports omit the field). Insert
+    // after exchanges so the ws_messages → exchanges foreign key is satisfied;
+    // payloads are re-sealed under the new project's key by wsMessages.insert.
+    for (const w of exported.websockets ?? []) {
+      store.wsMessages.insert({
+        id: w.id,
+        exchangeId: w.exchangeId,
+        seq: w.seq,
+        direction: w.direction,
+        kind: w.kind,
+        size: w.size,
+        truncated: w.truncated,
+        payload: Buffer.from(w.payloadBase64, 'base64'),
+        createdAt: w.createdAt,
+      });
+    }
     return store;
   }
 
@@ -326,6 +353,8 @@ export interface ProjectExportV1 {
   suppressions: import('../../shared/findings.js').SuppressionRule[];
   savedRequests: SavedRequest[];
   audit: import('../../shared/project.js').AuditEntry[];
+  /** Captured WebSocket frames. Optional: exports before this field omit it. */
+  websockets?: import('../../shared/websocket.js').WsMessage[];
 }
 
 function stripBodies(ex: HttpExchange): Omit<ExportedExchange, 'requestBody' | 'responseBody'> {

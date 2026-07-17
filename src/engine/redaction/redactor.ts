@@ -31,6 +31,14 @@ const CREDENTIAL_HEADERS = new Set([
   'x-xsrf-token',
 ]);
 
+/** Credential headers governed by their own dedicated toggle (handled above). */
+const OWN_TOGGLE_HEADERS = new Set([
+  'cookie',
+  'set-cookie',
+  'authorization',
+  'proxy-authorization',
+]);
+
 /** Query/param names commonly carrying secrets. */
 const SENSITIVE_PARAM_NAMES =
   /^(?:access_?token|id_?token|refresh_?token|api[_-]?key|apikey|secret|client_?secret|password|passwd|pwd|auth|session|sig|signature|code)$/i;
@@ -93,7 +101,16 @@ export class Redactor {
     ) {
       return REDACTION_MASK;
     }
-    if (this.config.maskSecretPatterns && CREDENTIAL_HEADERS.has(lower)) {
+    // Other whole-value credential headers (x-api-key, x-auth-token, x-csrf-token,
+    // …) are gated on maskAuthorization — NOT maskSecretPatterns. They are entire
+    // credentials, not free-text patterns, so disabling pattern scanning (to avoid
+    // mangling normal traffic) must not leak them. cookie/authorization are
+    // excluded here because they are governed by their own toggles above.
+    if (
+      this.config.maskAuthorization &&
+      CREDENTIAL_HEADERS.has(lower) &&
+      !OWN_TOGGLE_HEADERS.has(lower)
+    ) {
       return REDACTION_MASK;
     }
     return this.redactText(value);
@@ -107,7 +124,10 @@ export class Redactor {
   redactUrl(url: string): string {
     const qIndex = url.indexOf('?');
     if (qIndex === -1) return this.redactText(url);
-    const base = url.slice(0, qIndex);
+    // Redact the base too: a secret embedded in the PATH (JWT/API key in a REST
+    // segment) must be masked even when a query string is also present — else the
+    // same secret is masked without a query but leaks with one.
+    const base = this.redactText(url.slice(0, qIndex));
     const query = url.slice(qIndex + 1);
     const parts = query.split('&').map((pair) => {
       const eq = pair.indexOf('=');

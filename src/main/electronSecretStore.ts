@@ -53,8 +53,20 @@ export class ElectronSecretStore implements SecretStore {
     const buf = Buffer.from(enc, 'base64');
     try {
       return this.isSecure() ? safeStorage.decryptString(buf) : buf.toString('utf8');
-    } catch {
-      return null;
+    } catch (err) {
+      // The entry EXISTS but could not be decrypted — e.g. the project folder was
+      // copied to a different OS user or machine, so DPAPI/Keychain cannot unwrap
+      // it. This is NOT the same as "absent": returning null here would make
+      // CertificateAuthority.loadOrCreate regenerate and OVERWRITE the still-present
+      // CA key (permanent loss), and loadOrCreateDek silently drop at-rest
+      // encryption. Fail loud so callers fail closed. Mirrors FileSecretStore,
+      // which throws on a GCM auth-tag mismatch.
+      throw new Error(
+        `Secret "${key}" is present but could not be decrypted. This project's secrets were ` +
+          `sealed by a different OS user account or machine. Open it as the original user, or ` +
+          `restore the original secret store; the app will not regenerate keys over existing ones. ` +
+          `(${String(err)})`,
+      );
     }
   }
 

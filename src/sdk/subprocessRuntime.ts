@@ -9,12 +9,18 @@
  *    full escape here cannot read the engine, session, secrets, or DB in the
  *    host process.
  *  - Inside the child, each extension is additionally evaluated in a `vm` context
- *    with no `require`/`process`/`module` in scope (defense in depth), with a 2s
- *    top-level time box.
+ *    with no `require`/`process`/`module` in scope and with in-context code
+ *    generation (`eval`/`new Function`) disabled, plus a 2s top-level time box.
  *
- * NOTE: a separate process is a materially stronger boundary than a worker
- * thread, but it is NOT a full OS sandbox (no seccomp/AppContainer/sandbox-exec);
- * that remains future work. Only load extensions you trust.
+ * NOTE: the `vm` context is DEFENSE IN DEPTH, not an escape-proof boundary — a
+ * determined extension can still reach the child realm's globals (e.g. via a
+ * host-realm function's `.constructor`) and thus the child process's own
+ * filesystem/network. The load-bearing controls are (1) the separate OS PROCESS
+ * — the host's memory, session, CA key and DB are unreachable regardless of any
+ * in-child escape — and (2) redaction of every exchange/body/header handed to an
+ * extension (see host.ts). This is materially stronger than a worker thread but
+ * is NOT a full OS sandbox (no seccomp/AppContainer/sandbox-exec). Only load
+ * extensions you trust.
  */
 
 export const EXTENSION_HOST_SOURCE = String.raw`
@@ -78,7 +84,10 @@ function load(manifest, source, granted) {
     },
   };
   sandbox.module.exports = sandbox.exports;
-  const context = vm.createContext(sandbox);
+  // Disable in-context eval/new Function so a naive 'eval(...)' path is blocked
+  // (defense in depth; the host-realm .constructor path is documented as out of
+  // scope for the vm and mitigated by the process boundary + redaction).
+  const context = vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } });
   new vm.Script(source, { filename: 'belcher-ext:' + manifest.id }).runInContext(context, { timeout: 2000 });
   const mod = sandbox.module.exports;
   const activate = (mod && mod.activate) || sandbox.exports.activate;

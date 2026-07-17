@@ -3,6 +3,8 @@ import { api } from '../api.js';
 import { useStore } from '../store.js';
 import type { RepeaterResult } from '@shared/repeater.js';
 import type { ExchangeDetail } from '@shared/detail.js';
+import type { SavedRequest } from '@shared/project.js';
+import type { StoredCookie } from '@engine/repeater/cookieJar.js';
 import { MessageViewer } from './MessageViewer.js';
 import { bytesHuman } from '../lib/format.js';
 
@@ -21,6 +23,17 @@ export function RepeaterView(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RepeaterResult | null>(null);
   const [detail, setDetail] = useState<ExchangeDetail | undefined>(undefined);
+  const [saved, setSaved] = useState<SavedRequest[]>([]);
+  const [cookies, setCookies] = useState<StoredCookie[]>([]);
+  const [showCookies, setShowCookies] = useState(false);
+
+  const loadSaved = (): void => void api.listSavedRequests().then(setSaved);
+  const refreshCookies = (): void => void api.listCookies().then(setCookies);
+
+  useEffect(() => {
+    loadSaved();
+    refreshCookies();
+  }, []);
 
   useEffect(() => {
     if (s.repeaterSeed) {
@@ -42,6 +55,7 @@ export function RepeaterView(): JSX.Element {
       setResult(res);
       const d = await api.getExchangeDetail(res.exchange.id);
       setDetail(d);
+      if (useCookieJar) refreshCookies();
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -60,6 +74,22 @@ export function RepeaterView(): JSX.Element {
       raw,
     });
     s.setToast('Request saved.');
+    loadSaved();
+  };
+
+  const loadRequest = (id: string): void => {
+    const req = saved.find((r) => r.id === id);
+    if (!req) return;
+    setScheme(req.scheme);
+    setHost(req.host);
+    setPort(req.port);
+    setRaw(req.raw);
+  };
+
+  const clearCookies = async (): Promise<void> => {
+    await api.clearCookies();
+    refreshCookies();
+    s.setToast('Cookie jar cleared.');
   };
 
   return (
@@ -98,7 +128,24 @@ export function RepeaterView(): JSX.Element {
           />
           cookie jar
         </label>
+        <button className="ghost" onClick={() => setShowCookies((v) => !v)}>
+          Cookies ({cookies.length})
+        </button>
         <span className="spacer" style={{ flex: 1 }} />
+        <select
+          aria-label="Load saved request"
+          value=""
+          onChange={(e) => {
+            if (e.target.value) loadRequest(e.target.value);
+          }}
+        >
+          <option value="">Load saved…</option>
+          {saved.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.name}
+            </option>
+          ))}
+        </select>
         <button className="ghost" onClick={save}>
           Save
         </button>
@@ -106,6 +153,46 @@ export function RepeaterView(): JSX.Element {
           {busy ? 'Sending…' : 'Send ▶'}
         </button>
       </div>
+
+      {showCookies && (
+        <div className="warn-box" style={{ margin: 8 }}>
+          <div className="row">
+            <strong>Cookie jar</strong>
+            <span className="hint">
+              {cookies.length} cookie(s) — applied to same-host requests when “cookie jar” is on
+            </span>
+            <span className="spacer" style={{ flex: 1 }} />
+            <button className="ghost" onClick={refreshCookies}>
+              Refresh
+            </button>
+            <button className="ghost" onClick={clearCookies} disabled={cookies.length === 0}>
+              Clear jar
+            </button>
+          </div>
+          {cookies.length > 0 && (
+            <table className="grid" style={{ marginTop: 8 }}>
+              <thead>
+                <tr>
+                  <th>Host</th>
+                  <th>Name</th>
+                  <th>Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cookies.map((c, i) => (
+                  <tr key={`${c.host}-${c.name}-${i}`}>
+                    <td className="mono">{c.host}</td>
+                    <td className="mono">{c.name}</td>
+                    <td className="mono reveal-mask" title="cookie value (hidden)">
+                      {c.value.length > 40 ? `${c.value.slice(0, 40)}…` : c.value}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
 
       {error && (
         <div className="danger-box" style={{ margin: 8 }}>

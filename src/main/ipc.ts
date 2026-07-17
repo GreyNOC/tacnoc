@@ -145,6 +145,7 @@ const handlers: Record<string, Handler> = {
   listFindings: (s, _w, [inc]) => s.listFindings(Boolean(inc)),
   setFindingSuppressed: (s, _w, [id, v]) => s.setFindingSuppressed(id as string, Boolean(v)),
   addSuppression: (s, _w, [r]) => s.addSuppression(r as never),
+  removeSuppression: (s, _w, [id]) => s.removeSuppression(id as string),
   listSuppressions: (s) => s.listSuppressions(),
   scannerModules: (s) => s.scannerModules(),
 

@@ -67,6 +67,7 @@ export const INVOKE_METHODS = [
   'listFindings',
   'setFindingSuppressed',
   'addSuppression',
+  'removeSuppression',
   'listSuppressions',
   'scannerModules',
   'sendRepeater',

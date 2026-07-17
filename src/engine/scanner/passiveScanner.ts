@@ -115,9 +115,6 @@ export class PassiveScanner {
 
   private async bodyText(body: MessageBody, mt: string | undefined): Promise<string> {
     if (body.size === 0) return '';
-    if (body.size > MAX_SCAN_BODY_BYTES && body.contentEncoding !== 'gzip') {
-      // For very large uncompressed bodies, scan only the head.
-    }
     let bytes: Buffer;
     try {
       bytes = await readBodyBytes(body, this.blobStore);
@@ -126,7 +123,11 @@ export class PassiveScanner {
     }
     if (body.contentEncoding === 'gzip') {
       try {
-        bytes = zlib.gunzipSync(bytes);
+        // Bound decompression: a small gzip body can inflate to GBs (a zip bomb
+        // from a hostile origin). maxOutputLength caps the decompressed size at
+        // the same limit the scanner will read anyway; a body that exceeds it is
+        // skipped rather than allowed to exhaust memory.
+        bytes = zlib.gunzipSync(bytes, { maxOutputLength: MAX_SCAN_BODY_BYTES });
       } catch {
         return '';
       }

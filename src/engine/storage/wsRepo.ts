@@ -57,24 +57,21 @@ export class WsMessageRepo {
       exchangeId,
       limit,
     );
-    return rows.map((r) => {
-      const payload = r.payload
-        ? this.cipher
-          ? this.cipher.open(r.payload)
-          : Buffer.from(r.payload)
-        : Buffer.alloc(0);
-      return {
-        id: r.id,
-        exchangeId: r.exchange_id,
-        seq: r.seq,
-        direction: r.direction as WsMessage['direction'],
-        kind: r.kind as WsMessage['kind'],
-        size: r.size,
-        truncated: r.truncated === 1,
-        payloadBase64: payload.toString('base64'),
-        createdAt: r.created_at,
-      };
-    });
+    return rows.map((r) => this.rowToMessage(r));
+  }
+
+  /** Page through ALL captured WS messages (used by project export). */
+  listAll(limit: number, offset: number): WsMessage[] {
+    const rows = this.db.all<WsRow>(
+      'SELECT * FROM ws_messages ORDER BY created_at ASC, exchange_id ASC, seq ASC LIMIT ? OFFSET ?',
+      limit,
+      offset,
+    );
+    return rows.map((r) => this.rowToMessage(r));
+  }
+
+  countAll(): number {
+    return this.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM ws_messages')?.n ?? 0;
   }
 
   countByExchange(exchangeId: string): number {
@@ -84,5 +81,24 @@ export class WsMessageRepo {
         exchangeId,
       )?.n ?? 0
     );
+  }
+
+  private rowToMessage(r: WsRow): WsMessage {
+    const payload = r.payload
+      ? this.cipher
+        ? this.cipher.open(r.payload)
+        : Buffer.from(r.payload)
+      : Buffer.alloc(0);
+    return {
+      id: r.id,
+      exchangeId: r.exchange_id,
+      seq: r.seq,
+      direction: r.direction as WsMessage['direction'],
+      kind: r.kind as WsMessage['kind'],
+      size: r.size,
+      truncated: r.truncated === 1,
+      payloadBase64: payload.toString('base64'),
+      createdAt: r.created_at,
+    };
   }
 }

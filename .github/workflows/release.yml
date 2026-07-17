@@ -40,6 +40,23 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Install E2E system deps (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        # Electron (launched by Playwright) needs the same system libraries as the
+        # Playwright browsers; this installs them in a distro-version-agnostic way.
+        run: npx playwright install-deps
+      - name: Verify the packaged artifact (release gate)
+        # RELEASE.md declares this MANDATORY: packaged-only paths — WASM SQLite from
+        # app.asar.unpacked, the resources example extension, and forking the ext
+        # host out of the packaged binary — are invisible to the unit suite. A
+        # failure here fails the build job, which blocks draft-release (needs:build).
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a npm run test:e2e
+          else
+            npm run test:e2e
+          fi
       - name: Checksums
         run: npm run checksums
       - name: SBOM

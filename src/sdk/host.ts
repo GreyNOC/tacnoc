@@ -175,6 +175,10 @@ export class ExtensionHost {
         this.tabsMeta = [];
         this.actionsMeta = [];
         this.trafficSubscribers = 0;
+        // The child won't be reused after an unexpected exit, so remove its
+        // bootstrap temp dir now instead of leaking it until app shutdown
+        // (repeated crash/reload cycles would otherwise accumulate dirs).
+        this.cleanupChildDir();
       }
     });
     this.child.on('message', (m) => this.onMessage(m as Record<string, unknown>, resolveReady));
@@ -314,15 +318,50 @@ export class ExtensionHost {
   ): Promise<Finding[]> {
     if (this.checksMeta.length === 0) return [];
     await this.ready;
+    // Redact BEFORE crossing into the untrusted child. `passive-checks` is a
+    // non-elevated permission; without this it would receive full unredacted
+    // bodies and credential headers — strictly more sensitive data than the
+    // elevated (sanitized) `read-traffic` path, which combined with the process's
+    // own net/fs access is an exfiltration path for intercepted secrets.
     const res = await this.call<{ raw: RawExtFinding[] }>({
       type: 'runChecks',
-      exchange,
-      requestBodyText,
-      responseBodyText,
+      exchange: this.redactExchangeForChecks(exchange),
+      requestBodyText: this.redactor.redactText(requestBodyText),
+      responseBodyText: this.redactor.redactText(responseBodyText),
     });
     return (res.raw ?? []).map((r) =>
       this.materialize(exchange.id, r.module, r.version, r.finding),
     );
+  }
+
+  /**
+   * Build a copy of an exchange safe to hand to an untrusted extension check:
+   * headers and URL are redacted and raw body bytes are stripped (checks get the
+   * redacted body text separately).
+   */
+  private redactExchangeForChecks(ex: HttpExchange): HttpExchange {
+    const stripBody = (b: HttpExchange['request']['body']): HttpExchange['request']['body'] => ({
+      size: b.size,
+      truncated: b.truncated,
+      ...(b.contentEncoding ? { contentEncoding: b.contentEncoding } : {}),
+    });
+    const redacted: HttpExchange = {
+      ...ex,
+      request: {
+        ...ex.request,
+        url: this.redactor.redactUrl(ex.request.url),
+        headers: this.redactor.redactHeaders(ex.request.headers),
+        body: stripBody(ex.request.body),
+      },
+    };
+    if (ex.response) {
+      redacted.response = {
+        ...ex.response,
+        headers: this.redactor.redactHeaders(ex.response.headers),
+        body: stripBody(ex.response.body),
+      };
+    }
+    return redacted;
   }
 
   private materialize(
@@ -428,7 +467,11 @@ export class ExtensionHost {
       if (typeof t.unref === 'function') t.unref();
     });
     await exited;
-    // Best-effort cleanup of the child bootstrap temp dir.
+    this.cleanupChildDir();
+  }
+
+  /** Best-effort removal of the child bootstrap temp dir. Idempotent. */
+  private cleanupChildDir(): void {
     try {
       fs.rmSync(this.childDir, { recursive: true, force: true });
     } catch {

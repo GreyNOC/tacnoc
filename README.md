@@ -102,8 +102,9 @@ Packaging and the release runbook (SBOM, checksums, signing decision, CI) are in
 
 ## What works today (first delivery)
 
-Implemented and covered by the automated suite (109 unit/integration tests plus
-3 real-Electron E2E tests):
+Implemented and covered by the automated suite (138 unit/integration tests plus
+a real-Electron Playwright E2E suite: a smoke check, a full click-through, and a
+packaged-artifact verification). Run `npm test` for the current count.
 
 - HTTP/1.1 proxying; HTTPS interception via CONNECT + per-host leaf certs signed
   by the locally-generated project CA (verified with a real TLS handshake).
@@ -125,7 +126,11 @@ Implemented and covered by the automated suite (109 unit/integration tests plus
   false-positive suppression.
 - Controlled, scope-gated, rate-limited request variation with pause/resume,
   emergency stop, and an audit trail.
-- Versioned project export/import; close/reopen without data loss.
+- Versioned project export/import (including captured WebSocket frames);
+  close/reopen without data loss.
+- **Settings** screen for the engine limits, capture toggles, and redaction
+  policy; project export, saved-request loading, cookie-jar inspection, exchange
+  notes/tags, and suppression-rule management are all reachable from the UI.
 - Capability-based extension SDK; extensions run in an **isolated child process**
   with an RPC bridge (plus an inner `vm`), with a harmless example extension.
 

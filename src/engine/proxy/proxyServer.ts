@@ -248,9 +248,21 @@ export class ProxyServer {
         port = a.port;
       }
     } else if (/^https?:\/\//i.test(rawUrl)) {
-      const u = new URL(rawUrl);
-      host = u.hostname;
-      port = u.port ? Number(u.port) : 80;
+      // Absolute-form is the NORMAL request line a client sends to a plain-HTTP
+      // proxy. A malformed authority makes `new URL` throw; deriveContext is
+      // called outside try/catch in onRequest/onUpgrade, so an unguarded throw
+      // would crash the proxy (uncaughtException) or hang the socket. Parse
+      // defensively and fall back to the Host header, leaving host empty (→ a
+      // clean upstream failure) only when nothing is parseable.
+      try {
+        const u = new URL(rawUrl);
+        host = u.hostname;
+        port = u.port ? Number(u.port) : u.protocol === 'https:' ? 443 : 80;
+      } catch {
+        const a = parseAuthority(req.headers.host ?? '', 80);
+        host = a.host;
+        port = a.port;
+      }
     } else {
       const a = parseAuthority(req.headers.host ?? '', 80);
       host = a.host;
@@ -303,6 +315,25 @@ export class ProxyServer {
         );
         await drainToCollector(clientReq, collector);
         requestBody = await collector.finish();
+        if (requestBody.truncated) {
+          // Interception buffers the whole body so it can be shown/edited, but it
+          // exceeded the capture cap. Unlike the streaming (non-intercept) path,
+          // there is no full copy to forward, so forwarding the stored copy would
+          // silently truncate the request to the origin. Fail loud instead.
+          respondError(
+            clientRes,
+            413,
+            'Request body exceeds the interception capture limit; disable interception for this request or raise the limit.',
+          );
+          this.emitExchange(
+            ctx,
+            requestBody,
+            startedAt,
+            undefined,
+            'intercept: request body exceeded capture limit — not forwarded',
+          );
+          return;
+        }
         const bytes = await readBodyBytes(requestBody, this.deps.blobStore);
 
         const view: InterceptedRequestView = {
@@ -499,6 +530,23 @@ export class ProxyServer {
       );
       await drainToCollector(originRes, collector);
       responseBody = await collector.finish();
+      if (responseBody.truncated) {
+        // Same fidelity guard as the request path: we buffered the whole response
+        // to allow editing, but it exceeded the capture cap. Aborting the client
+        // transfer is a real error signal — far better than delivering a
+        // silently-truncated body that would masquerade as complete.
+        clientRes.destroy(new Error('response body exceeded interception capture limit'));
+        this.emitExchange(
+          ctx,
+          requestBody,
+          startedAt,
+          undefined,
+          'intercept: response body exceeded capture limit — not forwarded',
+          sent,
+          ttfbMs,
+        );
+        return;
+      }
       const bytes = await readBodyBytes(responseBody, this.deps.blobStore);
       const view: InterceptedResponseView = {
         id: ctx.id,
@@ -632,6 +680,14 @@ export class ProxyServer {
     const ctx = this.deriveContext(req, scheme);
     const startedAt = Date.now();
     clientSocket.on('error', () => clientSocket.destroy());
+
+    // A malformed/absent authority leaves host empty; there is nothing to tunnel
+    // to, so close the socket instead of dialing an empty host.
+    if (!ctx.host) {
+      this.log.warn('websocket upgrade with unresolvable host', { target: ctx.target });
+      clientSocket.destroy();
+      return;
+    }
 
     const upstream =
       scheme === 'https'

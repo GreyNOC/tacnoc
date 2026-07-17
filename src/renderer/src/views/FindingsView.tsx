@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.js';
-import type { Finding } from '@shared/findings.js';
+import type { Finding, SuppressionRule } from '@shared/findings.js';
 
 export function FindingsView(): JSX.Element {
   const s = useStore();
@@ -9,10 +9,13 @@ export function FindingsView(): JSX.Element {
   const [includeSuppressed, setIncludeSuppressed] = useState(false);
   const [selected, setSelected] = useState<Finding | null>(null);
   const [modules, setModules] = useState<{ module: string; version: string }[]>([]);
+  const [rules, setRules] = useState<SuppressionRule[]>([]);
+  const [showRules, setShowRules] = useState(false);
 
   const load = useCallback(() => {
     void api.listFindings(includeSuppressed).then(setFindings);
     void api.scannerModules().then(setModules);
+    void api.listSuppressions().then(setRules);
   }, [includeSuppressed]);
 
   useEffect(() => {
@@ -21,6 +24,26 @@ export function FindingsView(): JSX.Element {
 
   const suppress = async (f: Finding, on: boolean): Promise<void> => {
     await api.setFindingSuppressed(f.id, on);
+    load();
+    s.refreshFindings();
+  };
+
+  // Create a rule that suppresses this finding's type going forward.
+  const suppressType = async (f: Finding): Promise<void> => {
+    await api.addSuppression({
+      id: crypto.randomUUID(),
+      module: f.module,
+      dedupeKey: f.dedupeKey,
+      reason: `Suppressed "${f.title}" as a false positive`,
+      createdAt: Date.now(),
+    });
+    load();
+    s.refreshFindings();
+    s.setToast('Suppression rule added for this finding type.');
+  };
+
+  const deleteRule = async (id: string): Promise<void> => {
+    await api.removeSuppression(id);
     load();
     s.refreshFindings();
   };
@@ -38,10 +61,55 @@ export function FindingsView(): JSX.Element {
           include suppressed
         </label>
         <span className="spacer" style={{ flex: 1 }} />
+        <button className="ghost" onClick={() => setShowRules((v) => !v)}>
+          Suppression rules ({rules.length})
+        </button>
         <span className="hint">
           {modules.length} scanner modules · {findings.length} findings
         </span>
       </div>
+
+      {showRules && (
+        <div className="warn-box" style={{ margin: 8 }}>
+          <strong>Suppression rules</strong>{' '}
+          <span className="hint">
+            Matching findings are hidden as they arrive. Add a rule from a finding’s “Suppress this
+            type” button.
+          </span>
+          {rules.length === 0 ? (
+            <div className="empty" style={{ padding: 12 }}>
+              No suppression rules.
+            </div>
+          ) : (
+            <table className="grid" style={{ marginTop: 8 }}>
+              <thead>
+                <tr>
+                  <th>Module</th>
+                  <th>Dedupe key</th>
+                  <th>Host</th>
+                  <th>Reason</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {rules.map((r) => (
+                  <tr key={r.id}>
+                    <td className="mono">{r.module ?? 'any'}</td>
+                    <td className="mono">{r.dedupeKey ?? 'any'}</td>
+                    <td className="mono">{r.host ?? 'any'}</td>
+                    <td>{r.reason}</td>
+                    <td>
+                      <button className="ghost" onClick={() => deleteRule(r.id)}>
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
       <div className="split h" style={{ flex: 1 }}>
         <div className="pane">
           <div className="table-wrap">
@@ -118,6 +186,9 @@ export function FindingsView(): JSX.Element {
                 <div className="row" style={{ marginTop: 10 }}>
                   <button onClick={() => suppress(selected, !selected.suppressed)}>
                     {selected.suppressed ? 'Un-suppress' : 'Suppress (false positive)'}
+                  </button>
+                  <button className="ghost" onClick={() => suppressType(selected)}>
+                    Suppress this type (rule)
                   </button>
                 </div>
               </div>

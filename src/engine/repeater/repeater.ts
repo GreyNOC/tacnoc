@@ -79,7 +79,11 @@ export class Repeater {
     // eslint-disable-next-line no-constant-condition
     while (true) {
       if (options.useCookieJar && jar) {
-        const cookie = jar.cookieHeader(host);
+        // Reset the Cookie header from the jar for the CURRENT host each hop.
+        // Stripping first ensures a redirect to a host with no jar cookies does
+        // not carry the previous host's Cookie header (cross-host cookie leak).
+        headers = dropHeaders(headers, ['cookie']);
+        const cookie = jar.cookieHeader(host, scheme);
         if (cookie) headers = upsertHeader(headers, 'Cookie', cookie);
       }
 
@@ -105,10 +109,19 @@ export class Repeater {
       if (options.followRedirects && isRedirect && location && hops < options.maxRedirects) {
         redirects.push({ url: `${scheme}://${host}:${port}${path}`, status: single.statusCode });
         const next = new URL(location, `${scheme}://${host}:${port}${path}`);
+        const crossHost = next.hostname.toLowerCase() !== host.toLowerCase();
         scheme = next.protocol.replace(':', '') as Scheme;
         host = next.hostname;
         port = next.port ? Number(next.port) : scheme === 'https' ? 443 : 80;
         path = next.pathname + next.search;
+
+        // On a cross-host redirect, drop credential-bearing headers scoped to the
+        // previous host so a manually-supplied Cookie/Authorization is not leaked
+        // to an unrelated (possibly attacker-controlled) redirect target. The jar
+        // path re-applies the correct per-host Cookie at the top of the loop.
+        if (crossHost) {
+          headers = dropHeaders(headers, ['cookie', 'authorization']);
+        }
 
         // Adjust method/body per redirect semantics.
         if (

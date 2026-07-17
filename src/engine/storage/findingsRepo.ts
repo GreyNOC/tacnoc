@@ -33,8 +33,12 @@ export class FindingsRepo {
   /**
    * Insert a finding unless an identical one (same exchange + dedupeKey) already
    * exists. Returns true if inserted. Applies suppression rules on insert.
+   *
+   * `host` is the exchange host, supplied by callers that know it so host-scoped
+   * suppression rules can be enforced. When omitted, host-scoped rules do NOT
+   * match (fail-safe: a finding is shown rather than silently hidden).
    */
-  upsert(finding: Finding): boolean {
+  upsert(finding: Finding, host?: string): boolean {
     const existing = this.db.get<{ id: string }>(
       'SELECT id FROM findings WHERE exchange_id = ? AND dedupe_key = ?',
       finding.exchangeId,
@@ -42,7 +46,7 @@ export class FindingsRepo {
     );
     if (existing) return false;
 
-    const suppressed = finding.suppressed || this.matchesSuppression(finding);
+    const suppressed = finding.suppressed || this.matchesSuppression(finding, host);
     this.db.run(
       `INSERT INTO findings (
         id, exchange_id, dedupe_key, title, severity, confidence, module,
@@ -140,11 +144,19 @@ export class FindingsRepo {
     this.db.run('DELETE FROM suppressions WHERE id = ?', id);
   }
 
-  private matchesSuppression(finding: Finding): boolean {
+  private matchesSuppression(finding: Finding, host?: string): boolean {
     for (const rule of this.listSuppressions()) {
+      // A rule with NO populated matcher must never match everything. (Guards the
+      // documented "empty fields are wildcards" semantics from degenerating into
+      // "a host-only or empty rule mutes all findings on every host".)
+      if (!rule.module && !rule.dedupeKey && !rule.host) continue;
       if (rule.module && rule.module !== finding.module) continue;
       if (rule.dedupeKey && rule.dedupeKey !== finding.dedupeKey) continue;
-      // host matching is applied by callers that know the host; module+key is enough here.
+      if (rule.host) {
+        // host is only known when the caller passes it; if unknown, or it doesn't
+        // match, this rule does not apply (do not suppress).
+        if (host === undefined || host.toLowerCase() !== rule.host.toLowerCase()) continue;
+      }
       return true;
     }
     return false;

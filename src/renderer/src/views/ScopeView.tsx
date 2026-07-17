@@ -22,6 +22,10 @@ export function ScopeView(): JSX.Element {
 
   useEffect(() => {
     void api.getScope().then(setScope);
+    // Re-sync if scope changes anywhere else (import, another surface, tests).
+    return api.onEvent((e) => {
+      if (e.type === 'scope-changed') setScope(e.payload);
+    });
   }, []);
 
   const persist = async (next: ScopeConfig): Promise<void> => {

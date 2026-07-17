@@ -148,9 +148,12 @@ const corsCheck: ScannerCheck = {
   run(ctx) {
     const ex = ctx.exchange;
     const acao = getHeader(ex.response!.headers, 'access-control-allow-origin') ?? '';
-    const acac = getHeader(ex.response!.headers, 'access-control-allow-credentials') ?? '';
+    const acac =
+      (getHeader(ex.response!.headers, 'access-control-allow-credentials') ?? '').toLowerCase() ===
+      'true';
+    const reqOrigin = getHeader(ex.request.headers, 'origin');
     const findings: RawFinding[] = [];
-    if (acao === '*' && acac.toLowerCase() === 'true') {
+    if (acao === '*' && acac) {
       findings.push({
         dedupeKey: `${endpointKey(ex)}|cors|wildcard-credentials`,
         title: 'CORS allows any origin together with credentials',
@@ -164,6 +167,47 @@ const corsCheck: ScannerCheck = {
           {
             location: 'response-headers',
             excerpt: `Access-Control-Allow-Origin: *; Allow-Credentials: true`,
+            field: 'Access-Control-Allow-Origin',
+          },
+        ],
+      });
+    } else if (acac && reqOrigin && acao && acao === reqOrigin) {
+      // The exploitable, common misconfiguration: the server echoes the
+      // caller-supplied Origin AND allows credentials, so ANY origin can read
+      // credentialed responses. Browsers forbid '*'+credentials, which is why
+      // reflection — not '*' — is the real account-takeover-grade CORS bug.
+      findings.push({
+        dedupeKey: `${endpointKey(ex)}|cors|reflected-credentials`,
+        title: 'CORS reflects the request Origin with credentials',
+        severity: 'high',
+        confidence: 'firm',
+        description:
+          'Access-Control-Allow-Origin reflects the request Origin while Access-Control-Allow-Credentials is true, so any site can make credentialed cross-origin reads of this resource.',
+        remediation:
+          'Validate the Origin against a fixed allowlist; never reflect an arbitrary Origin together with credentials.',
+        evidence: [
+          {
+            location: 'response-headers',
+            excerpt: `Access-Control-Allow-Origin: ${acao} (reflected request Origin); Allow-Credentials: true`,
+            field: 'Access-Control-Allow-Origin',
+          },
+        ],
+      });
+    } else if (acac && acao.toLowerCase() === 'null') {
+      // "null" origin + credentials is reachable from sandboxed iframes / data
+      // URLs and is likewise exploitable.
+      findings.push({
+        dedupeKey: `${endpointKey(ex)}|cors|null-credentials`,
+        title: 'CORS allows the "null" origin with credentials',
+        severity: 'high',
+        confidence: 'firm',
+        description:
+          'Access-Control-Allow-Origin: null with Allow-Credentials: true lets sandboxed iframes and other "null"-origin contexts read credentialed responses.',
+        remediation: 'Do not allow the "null" origin together with credentials.',
+        evidence: [
+          {
+            location: 'response-headers',
+            excerpt: 'Access-Control-Allow-Origin: null; Allow-Credentials: true',
             field: 'Access-Control-Allow-Origin',
           },
         ],

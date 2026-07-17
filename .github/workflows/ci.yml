@@ -27,6 +27,15 @@ jobs:
         run: npm test
       - name: Build app bundles
         run: npm run build
+      - name: Install E2E system deps
+        # Electron (launched by Playwright) needs the same system libs as the
+        # Playwright browsers.
+        run: npx playwright install-deps
+      - name: GUI E2E over the real Electron app (dev bundle)
+        # Runs smoke + full click-through against out/ (the packaged spec
+        # auto-skips without dist/). Catches CSP/renderer regressions the headless
+        # engine suite cannot see.
+        run: xvfb-run -a npm run test:e2e
 
   audit:
     name: dependency audit

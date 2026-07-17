@@ -16,6 +16,7 @@ import type {
   ResponseDecision,
 } from '@shared/intercept.js';
 import type { RepeaterOptions, RepeaterResult } from '@shared/repeater.js';
+import type { StoredCookie } from '@engine/repeater/cookieJar.js';
 import type { JobProgress, VariationPlan, VariationResultRow } from '@shared/variation.js';
 import type { AuditEntry } from '@shared/project.js';
 import type { JwtInspection } from '@engine/transforms/codec.js';
@@ -88,6 +89,8 @@ export const api = {
     b().invoke<Finding[]>('listFindings', includeSuppressed),
   setFindingSuppressed: (id: string, s: boolean) => b().invoke<void>('setFindingSuppressed', id, s),
   addSuppression: (r: SuppressionRule) => b().invoke<void>('addSuppression', r),
+  removeSuppression: (id: string) => b().invoke<void>('removeSuppression', id),
+  listSuppressions: () => b().invoke<SuppressionRule[]>('listSuppressions'),
   scannerModules: () => b().invoke<{ module: string; version: string }[]>('scannerModules'),
 
   // repeater
@@ -97,6 +100,8 @@ export const api = {
   ) => b().invoke<RepeaterResult>('sendRepeater', target, options),
   listSavedRequests: () => b().invoke<SavedRequest[]>('listSavedRequests'),
   saveRequest: (r: SavedRequest) => b().invoke<void>('saveRequest', r),
+  listCookies: () => b().invoke<StoredCookie[]>('listCookies'),
+  clearCookies: () => b().invoke<void>('clearCookies'),
 
   // transforms + compare
   listTransforms: () =>

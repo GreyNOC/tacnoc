@@ -120,6 +120,25 @@ export class BelcherSession extends EventEmitter {
 
   private wireProject(): void {
     const project = this.requireProject();
+    this.buildConfigComponents(project);
+    this.variation = new VariationEngine({
+      blobStore: project.blobs,
+      getScope: () => project.scope,
+      onExchange: (ex) => this.ingest(ex),
+      audit: { append: (e) => project.audit.append(e) },
+      logger: this.log,
+    });
+    this.variation.on('progress', (p: JobProgress) => this.emit('job-progress', p));
+    this.variation.on('done', (p: JobProgress) => this.emit('job-done', p));
+    this.emit('project-open', project.info);
+  }
+
+  /**
+   * Build the config-derived components (passive scanner + repeater). They
+   * snapshot redaction/limits at construction, so this is re-run by setConfig()
+   * to apply config changes without requiring a project reopen.
+   */
+  private buildConfigComponents(project: ProjectStore): void {
     this.scanner = new PassiveScanner(
       project.blobs,
       project.config.redaction,
@@ -134,16 +153,6 @@ export class BelcherSession extends EventEmitter {
       limits: project.config.limits,
       getScope: () => project.scope,
     });
-    this.variation = new VariationEngine({
-      blobStore: project.blobs,
-      getScope: () => project.scope,
-      onExchange: (ex) => this.ingest(ex),
-      audit: { append: (e) => project.audit.append(e) },
-      logger: this.log,
-    });
-    this.variation.on('progress', (p: JobProgress) => this.emit('job-progress', p));
-    this.variation.on('done', (p: JobProgress) => this.emit('job-done', p));
-    this.emit('project-open', project.info);
   }
 
   async closeProject(): Promise<void> {
@@ -196,7 +205,7 @@ export class BelcherSession extends EventEmitter {
         .scan(ex)
         .then((findings) => {
           for (const f of findings) {
-            if (project.findings.upsert(f)) this.emit('finding', f);
+            if (project.findings.upsert(f, ex.host)) this.emit('finding', f);
           }
         })
         .catch((err) => this.log.warn('scan failed', { err: String(err) }));
@@ -240,7 +249,7 @@ export class BelcherSession extends EventEmitter {
     const listener = project.config.listener;
     const bindHost = host ?? listener.host;
     const bindPort = port ?? listener.port;
-    this.proxy = new ProxyServer({
+    const proxy = new ProxyServer({
       ca: project.ca,
       limits: project.config.limits,
       blobStore: project.blobs,
@@ -252,7 +261,12 @@ export class BelcherSession extends EventEmitter {
       enableHttp2: project.config.interceptHttp2,
       logger: this.log,
     });
-    const bound = await this.proxy.start(bindHost, bindPort);
+    // Assign this.proxy only AFTER a successful listen. If start() rejects
+    // (e.g. EADDRINUSE), this.proxy stays undefined so the `if (this.proxy)`
+    // guard above still permits a retry — otherwise a single failed start would
+    // wedge the proxy as permanently unstartable until the project is reopened.
+    const bound = await proxy.start(bindHost, bindPort);
+    this.proxy = proxy;
     this.emit('proxy-state', this.getProxyStatus());
     this.log.info('proxy started via session', { ...bound, loopback: isLoopbackBind(bindHost) });
     return this.getProxyStatus();
@@ -307,7 +321,12 @@ export class BelcherSession extends EventEmitter {
     return this.requireProject().config;
   }
   setConfig(config: EngineConfig): void {
-    this.requireProject().meta.setConfig(config);
+    const project = this.requireProject();
+    project.meta.setConfig(config);
+    // Apply redaction/limit changes to the scanner + repeater right away (they
+    // snapshot config at build time). The proxy reads config live on its next
+    // start; the variation engine takes limits per-job from the plan.
+    this.buildConfigComponents(project);
   }
 
   // ---- interception ----
@@ -424,6 +443,9 @@ export class BelcherSession extends EventEmitter {
   }
   addSuppression(rule: SuppressionRule): void {
     this.requireProject().findings.addSuppression(rule);
+  }
+  removeSuppression(id: string): void {
+    this.requireProject().findings.removeSuppression(id);
   }
   listSuppressions(): SuppressionRule[] {
     return this.requireProject().findings.listSuppressions();

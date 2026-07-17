@@ -127,6 +127,23 @@ test('end-to-end: proxy capture, findings, and all views render with real data',
   await win.getByRole('button', { name: /Load bundled example/i }).click();
   await expect(win.getByText('Header Hygiene (example)')).toBeVisible({ timeout: 15000 });
 
+  // 9b) Settings view renders the engine-config editor (the "Configurable limits"
+  // feature) and the project export/close controls.
+  await win.getByRole('button', { name: 'Settings' }).click();
+  await expect(win.getByRole('heading', { name: 'Proxy listener' })).toBeVisible();
+  await expect(win.getByRole('heading', { name: /Automation limits/ })).toBeVisible();
+  await expect(win.getByRole('button', { name: 'Export project…' })).toBeVisible();
+
+  // 9c) Repeater exposes the saved-request loader and the cookie-jar panel.
+  await win.getByRole('button', { name: 'Repeater' }).click();
+  await expect(win.getByLabel('Load saved request')).toBeVisible();
+  await win.getByRole('button', { name: /Cookies \(/ }).click();
+  await expect(win.getByText('Cookie jar', { exact: true })).toBeVisible();
+
+  // 9d) Findings exposes suppression-rule management.
+  await win.getByRole('button', { name: 'Findings' }).click();
+  await expect(win.getByRole('button', { name: /Suppression rules \(/ })).toBeVisible();
+
   // 10) Emergency stop is always available and safe to click.
   await win.getByRole('button', { name: /EMERGENCY STOP/ }).click();
   await expect(win.getByRole('button', { name: 'HTTP History' })).toBeVisible();

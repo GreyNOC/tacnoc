@@ -6,6 +6,63 @@ All notable changes to GreyNOC Belcher are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-07-17
+
+### QA/QC pass — adversarial audit fixes
+
+Findings from a multi-agent adversarial review of every engine and the full
+renderer↔IPC↔engine wiring, each fixed with a regression test (suite grew from
+119 to 138 tests).
+
+#### Wired features that were exposed over IPC but unreachable in the UI
+
+- **Settings** view: edit the engine config (listener host/port with a
+  non-loopback warning, automation limits, capture/body limits, HTTP/2 and
+  WebSocket capture toggles, redaction policy) plus project export and close.
+  `setConfig` now applies redaction/repeater-limit changes immediately instead
+  of silently requiring a project reopen.
+- Repeater: load saved requests, and inspect/clear the cookie jar.
+- History inspector: edit per-exchange notes and tags.
+- Findings: create, list, and delete suppression **rules** (not just per-finding
+  suppression).
+- Scope view now re-syncs on external `scope-changed` events.
+
+#### Correctness / security fixes
+
+- Proxy no longer crashes/hangs on a malformed absolute-form request target
+  (`new URL` guarded; upgrade handler destroys the socket on an unresolvable host).
+- Secret store fails **closed**: a present-but-undecryptable CA key/DEK (e.g. a
+  project copied to another OS user) now raises an error instead of regenerating
+  over the key or silently dropping at-rest encryption.
+- Suppression rules no longer mute *all* findings when only `host` (or nothing) is
+  set; host is matched against the exchange host.
+- `redactUrl` masks secrets in the URL **path**, not just the query string.
+- Session `startProxy` no longer wedges the proxy after a failed bind.
+- Repeater drops `Cookie`/`Authorization` on cross-host redirects; the cookie jar
+  no longer replays `Secure` cookies over cleartext and detects hyphenated-epoch
+  `Expires` deletions.
+- Passive scanner: bounded gzip decompression (decompression-bomb guard); CORS
+  check now flags reflected-Origin-with-credentials and `null`-origin-with-
+  credentials (the actually-exploitable cases).
+- Intercept mode fails loud instead of forwarding a silently-truncated body that
+  exceeds the capture cap.
+- Extension checks receive a **redacted** exchange (headers/URL/body), matching
+  the sanitized `read-traffic` surface; `vm` in-context code generation disabled;
+  child temp dir cleaned up on crash; overstated fs/network isolation claims in
+  the SDK docs/API corrected.
+- WebSocket frames are now included in project export/import.
+- Migrations bump `user_version` inside the schema transaction (atomic).
+- `htmlDecode` is a correct single-pass inverse of `htmlEncode` and no longer
+  throws on out-of-range numeric character references.
+- Scope host normalization strips all trailing dots; whole-value credential
+  headers (`x-api-key`, …) mask independently of pattern scanning; variation
+  pause/resume are audited and the documented absolute request ceiling is enforced.
+
+#### Release / CI
+
+- The release pipeline now runs the **mandatory packaged-artifact E2E** (it was
+  documented as required but never executed); CI runs the real-Electron GUI E2E.
+
 ## [0.1.0] — 2026-07-16
 
 First delivery: a working, tested intercepting-proxy workbench for authorized
@@ -100,5 +157,6 @@ web-application security research.
   seccomp / AppContainer / `sandbox-exec`).
 - At-rest encryption covers content, not searchable metadata.
 
-[Unreleased]: https://example.invalid/greynoc/belcher/compare/v0.1.0...HEAD
+[Unreleased]: https://example.invalid/greynoc/belcher/compare/v0.2.0...HEAD
+[0.2.0]: https://example.invalid/greynoc/belcher/compare/v0.1.0...v0.2.0
 [0.1.0]: https://example.invalid/greynoc/belcher/releases/tag/v0.1.0

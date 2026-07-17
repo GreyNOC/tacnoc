@@ -10,9 +10,9 @@ import type { ScopeConfig, ScopeDecision, ScopeRule, ScopeTarget } from '../../s
 import type { Scheme } from '../../shared/model.js';
 
 function normalizeHost(host: string): string {
-  let h = host.trim().toLowerCase();
-  if (h.endsWith('.')) h = h.slice(0, -1); // drop FQDN trailing dot
-  return h;
+  // Strip ALL trailing dots (not just one) so the safety gate's canonicalization
+  // is exhaustive — a residual dot would let an exclude rule under-match.
+  return host.trim().toLowerCase().replace(/\.+$/, '');
 }
 
 /** Translate a wildcard host glob into an anchored RegExp. */

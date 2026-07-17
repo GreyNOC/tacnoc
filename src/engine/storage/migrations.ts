@@ -175,10 +175,15 @@ export function applyMigrations(db: Database): void {
   const current = db.getUserVersion();
   for (const migration of MIGRATIONS) {
     if (migration.version > current) {
+      // Bump user_version INSIDE the same transaction as the schema change so the
+      // two commit atomically. If it were set after COMMIT, a crash in the gap
+      // would leave the tables created but the version unbumped, and the next
+      // open would re-run CREATE TABLE and fail to open the project. SQLite
+      // permits PRAGMA user_version inside a transaction.
       db.transaction(() => {
         migration.up(db);
+        db.setUserVersion(migration.version);
       });
-      db.setUserVersion(migration.version);
     }
   }
 }

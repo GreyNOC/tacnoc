@@ -3,11 +3,17 @@
  *
  * The API is CAPABILITY-BASED: an extension declares the permissions it needs in
  * its manifest, the user approves them, and the host injects an API object that
- * exposes ONLY the granted capabilities. There is deliberately NO permission
- * that grants filesystem, process, network, or secret access — extensions
- * cannot obtain those through this SDK.
+ * exposes ONLY the granted capabilities. No permission grants filesystem,
+ * process, network, or secret access through this SDK.
  *
- * See docs/extension-sdk.md for the isolation model and its limits.
+ * IMPORTANT — this is NOT a sandbox guarantee. Extensions run in a separate OS
+ * process that itself has ambient filesystem and network access, and the inner
+ * `vm` is defense-in-depth, not an escape-proof boundary. What actually protects
+ * you is (1) the OS process boundary — host-process memory, the session, the CA
+ * key, and the database are unreachable from the extension; and (2) redaction —
+ * every exchange, header, URL, and body handed to an extension is passed through
+ * the redactor first. Treat extensions as untrusted code with network access:
+ * only load extensions you trust. See docs/extension-sdk.md for the full model.
  */
 
 import type { ScannerCheck } from '../engine/scanner/types.js';

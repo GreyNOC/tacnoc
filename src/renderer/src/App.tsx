@@ -12,6 +12,7 @@ import { CompareView } from './views/CompareView.js';
 import { CertificateView } from './views/CertificateView.js';
 import { ExtensionsView } from './views/ExtensionsView.js';
 import { AuditView } from './views/AuditView.js';
+import { SettingsView } from './views/SettingsView.js';
 import { api } from './api.js';
 
 function Logo(): JSX.Element {
@@ -57,6 +58,7 @@ const NAV: { group: string; items: { id: ViewId; label: string }[] }[] = [
     items: [
       { id: 'certificate', label: 'CA Certificate' },
       { id: 'extensions', label: 'Extensions' },
+      { id: 'settings', label: 'Settings' },
     ],
   },
 ];
@@ -171,6 +173,8 @@ function ActiveView(): JSX.Element {
       return <ExtensionsView />;
     case 'audit':
       return <AuditView />;
+    case 'settings':
+      return <SettingsView />;
     default:
       return <HistoryView />;
   }

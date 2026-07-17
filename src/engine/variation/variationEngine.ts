@@ -33,7 +33,7 @@ import { originForm } from '../proxy/proxyUtil.js';
 import { sendRaw } from '../net/httpClient.js';
 import { TokenBucket, Semaphore, AbortError } from '../util/rateLimit.js';
 import { Logger, rootLogger } from '../logging/logger.js';
-import { iterate, planCount, renderRequest } from './payloads.js';
+import { ABSOLUTE_MAX, iterate, planCount, renderRequest } from './payloads.js';
 
 export interface VariationDeps {
   blobStore: BlobStore;
@@ -133,6 +133,11 @@ export class VariationEngine extends EventEmitter {
     if (count <= 0) {
       throw new Error('Refusing to create job: the plan generates 0 requests.');
     }
+    if (count > ABSOLUTE_MAX) {
+      throw new Error(
+        `Refusing to create job: plan generates ${count} requests, exceeding the absolute safety ceiling of ${ABSOLUTE_MAX} (regardless of the configured per-job maximum).`,
+      );
+    }
     if (count > plan.limits.maxRequestsPerJob) {
       throw new Error(
         `Refusing to create job: plan generates ${count} requests, exceeding the maximum of ${plan.limits.maxRequestsPerJob}. Narrow the payloads or raise the limit deliberately.`,
@@ -162,11 +167,23 @@ export class VariationEngine extends EventEmitter {
   }
 
   pause(id: string): void {
-    this.jobs.get(id)?.pause();
+    const job = this.jobs.get(id);
+    if (!job) return;
+    const wasRunning = job.status === 'running';
+    job.pause();
+    if (wasRunning && job.status === 'paused') {
+      this.deps.audit.append({ ts: Date.now(), actor: 'user', action: 'job.pause', jobId: id });
+    }
     this.emitProgress(id);
   }
   resume(id: string): void {
-    this.jobs.get(id)?.resume();
+    const job = this.jobs.get(id);
+    if (!job) return;
+    const wasPaused = job.status === 'paused';
+    job.resume();
+    if (wasPaused && job.status === 'running') {
+      this.deps.audit.append({ ts: Date.now(), actor: 'user', action: 'job.resume', jobId: id });
+    }
     this.emitProgress(id);
   }
   stop(id: string): void {

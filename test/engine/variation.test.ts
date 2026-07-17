@@ -92,6 +92,28 @@ describe('variation engine — safety gates', () => {
     expect(() => engine.createJob(plan)).toThrow(/exceeding the maximum/i);
   });
 
+  it('refuses to exceed the absolute safety ceiling regardless of the per-job max', () => {
+    reset();
+    scope = inScopeHost();
+    const big = Array.from({ length: 400 }, (_, i) => String(i)); // 400 × 400 = 160k > 100k
+    const plan: VariationPlan = {
+      name: 'ceiling',
+      base: {
+        scheme: 'http',
+        host: '127.0.0.1',
+        port: server.httpPort,
+        raw: raw('/json?a={{0}}&b={{1}}'),
+      },
+      positions: [
+        { marker: '{{0}}', source: { kind: 'list', values: big } },
+        { marker: '{{1}}', source: { kind: 'list', values: big } },
+      ],
+      mode: 'clusterbomb',
+      limits: { ...LIMITS, maxRequestsPerJob: 1_000_000 },
+    };
+    expect(() => engine.createJob(plan)).toThrow(/absolute safety ceiling/i);
+  });
+
   it('computes exact counts per mode', () => {
     const base = {
       scheme: 'http' as const,
@@ -190,6 +212,28 @@ describe('variation engine — execution', () => {
     // burst≈4, then 4 more at 4/s ⇒ ≥ ~0.75s. Allow generous lower bound.
     expect(elapsed).toBeGreaterThan(600);
     expect(engine.getProgress(id)?.completed).toBe(8);
+  });
+
+  it('records pause and resume in the audit log', async () => {
+    reset();
+    scope = inScopeHost();
+    const plan: VariationPlan = {
+      name: 'pauseresume',
+      base: { scheme: 'http', host: '127.0.0.1', port: server.httpPort, raw: raw('/json?x={{0}}') },
+      positions: [{ marker: '{{0}}', source: { kind: 'range', from: 1, to: 20, step: 1 } }],
+      mode: 'batteringram',
+      limits: { ...LIMITS, requestsPerSecond: 8, maxConcurrency: 1 },
+    };
+    const { id } = engine.createJob(plan);
+    const running = engine.run(id);
+    await new Promise((r) => setTimeout(r, 150));
+    engine.pause(id);
+    await new Promise((r) => setTimeout(r, 100));
+    engine.resume(id);
+    await running;
+    const actions = audit.map((a) => a.action);
+    expect(actions).toContain('job.pause');
+    expect(actions).toContain('job.resume');
   });
 
   it('honors emergency stop mid-run', async () => {
