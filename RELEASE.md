@@ -83,6 +83,22 @@ npm run release:prepare      # ci gate + SBOM
 git tag vX.Y.Z && git push --tags   # triggers release.yml (drafts the release)
 ```
 
+### v0.2.0 — cut UNSIGNED (operator decision, 2026-07-17)
+
+`v0.2.0` (the QA/QC pass — see `CHANGELOG.md`) was built and tagged locally with
+**no code signing**, a deliberate operator decision. Quality gate green (138
+unit/integration tests), production `npm audit` clean, and the packaged binary
+verified via `test/e2e/packaged.spec.ts`. Windows x64 artifacts:
+
+| Artifact | SHA-256 |
+|---|---|
+| `GreyNOC Belcher-0.2.0-x64.exe` (NSIS) | `be673d0c2dcc006dd901afad342d52c5d785b8bccb959d2989a518dda4397ce8` |
+| `GreyNOC Belcher-0.2.0-x64.zip` (portable) | `8cf0285cfe76b40a35ccb924af1cad582e5761b31abff03eca68b925e98e407f` |
+
+Manifest: `dist/SHA256SUMS-windows.txt`. macOS/Linux artifacts were not built on
+this host. The unsigned-install caveats below (SmartScreen/Gatekeeper, no
+in-binary proof of origin) apply identically to this cut.
+
 ### v0.1.0 — cut UNSIGNED (operator decision, 2026-07-16)
 
 `v0.1.0` was built and tagged locally with **no code signing**, a deliberate
