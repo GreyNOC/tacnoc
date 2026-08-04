@@ -60,6 +60,24 @@ const TASK_BUDGET_BETA = 'task-budgets-2026-03-13';
 const startsWithAny = (prefixes: string[], model: string): boolean =>
   prefixes.some((p) => model.startsWith(p));
 
+/**
+ * One turn of a streaming tool-runner: the SSE events, then the assembled
+ * message. Only the two members this provider actually reads are declared.
+ */
+interface StreamedTurn<M> extends AsyncIterable<StreamEvent> {
+  finalMessage(): Promise<M>;
+}
+
+/**
+ * The one event shape we act on. Declared as a single open type rather than a
+ * union: a union whose fallback arm is `{type: string}` is not discriminated —
+ * the fallback absorbs every literal and `delta` becomes unreachable.
+ */
+interface StreamEvent {
+  type: string;
+  delta?: { type: string; text?: string };
+}
+
 export interface AnthropicProviderOptions {
   apiKey: string;
   baseUrl?: string;
@@ -76,7 +94,12 @@ export class AnthropicProvider implements LlmProvider {
       apiKey: opts.apiKey,
       ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
     });
-    this.defaultMaxTokens = opts.defaultMaxTokens ?? 8192;
+    // Streaming removes the timeout ceiling that forced a small cap, so the
+    // budget can be sized for the work instead. The agentic roles run at xhigh
+    // effort, where adaptive thinking takes a large share of the output budget —
+    // at 8192 a planner could spend the whole allowance thinking and return a
+    // truncated plan with `stop_reason: max_tokens`, burning the turn.
+    this.defaultMaxTokens = opts.defaultMaxTokens ?? 64000;
   }
 
   async runAgent(options: AgentTurnOptions): Promise<AgentTurnResult> {
@@ -112,6 +135,17 @@ export class AnthropicProvider implements LlmProvider {
       ],
       messages: options.messages.map((m) => ({ role: m.role, content: m.content })),
       tools: runnable,
+      // Stream, always.
+      //
+      // The SDK refuses a NON-streaming request whose max_tokens implies it could
+      // run past the 10-minute HTTP ceiling — "Streaming is required for
+      // operations that may take longer than 10 minutes" — and it refuses it
+      // before sending anything, so the turn dies with no output at all. Agentic
+      // roles at xhigh effort are exactly the shape that trips it.
+      //
+      // It also earns its keep: text now reaches the operator as it is generated
+      // rather than in one lump when the turn ends.
+      stream: true as const,
       ...(useAdaptive ? { thinking: { type: 'adaptive' as const } } : {}),
       ...(Object.keys(outputConfig).length ? { output_config: outputConfig } : {}),
     };
@@ -122,30 +156,54 @@ export class AnthropicProvider implements LlmProvider {
 
     // `as never`: the body carries beta-only fields (thinking/output_config) that
     // are valid on the wire but not all typed in the SDK's params yet.
-    const runner = this.client.beta.messages.toolRunner(body as never, reqOptions);
+    const rawRunner = this.client.beta.messages.toolRunner(body as never, reqOptions);
+    type FinalMessage = Awaited<ReturnType<typeof rawRunner.done>>;
+    // The `as never` above also erases `stream: true` from the runner's inferred
+    // type, so it still claims to yield messages. Restore the streaming shape
+    // explicitly rather than iterating against a type that does not match what
+    // arrives at runtime.
+    const runner = rawRunner as unknown as AsyncIterable<StreamedTurn<FinalMessage>> & {
+      done(): Promise<FinalMessage>;
+      pushMessages(...messages: { role: 'assistant'; content: FinalMessage['content'] }[]): void;
+    };
 
     let input = 0;
     let output = 0;
     let finalText = '';
-    for await (const message of runner) {
+    // With `stream: true` each iteration yields a STREAM, not a message — a
+    // `message.stop_reason` check against it silently never matches.
+    for await (const stream of runner) {
+      // Reset per message. Carrying text forward from an earlier turn would let a
+      // declined or empty final message be reported as this role's answer — the
+      // exact "silence looks like a result" failure the refusal handling exists
+      // to prevent.
+      let messageText = '';
+      for await (const event of stream) {
+        if (
+          event.type === 'content_block_delta' &&
+          event.delta?.type === 'text_delta' &&
+          event.delta.text
+        ) {
+          messageText += event.delta.text;
+          options.onText?.(event.delta.text);
+        }
+      }
+      const message = await stream.finalMessage();
       const u = message.usage;
       input +=
         (u.input_tokens ?? 0) +
         (u.cache_read_input_tokens ?? 0) +
         (u.cache_creation_input_tokens ?? 0);
       output += u.output_tokens ?? 0;
-      // Reset per message. Carrying text forward from an earlier turn would let a
-      // declined or empty final message be reported as this role's answer — the
-      // exact "silence looks like a result" failure the refusal handling exists
-      // to prevent.
-      let messageText = '';
-      for (const block of message.content) {
-        if (block.type === 'text' && block.text) {
-          messageText += block.text;
-          options.onText?.(block.text);
-        }
-      }
       finalText = messageText;
+
+      // The runner does NOT resume a paused turn on its own — it only continues
+      // after a tool produces a result. A `pause_turn` would otherwise end the
+      // loop with no error and no warning, and the truncated answer would be
+      // reported as this role's complete work.
+      if (message.stop_reason === 'pause_turn') {
+        runner.pushMessages({ role: 'assistant', content: message.content });
+      }
     }
     const final = await runner.done();
     return {

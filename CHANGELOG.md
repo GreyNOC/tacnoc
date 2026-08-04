@@ -6,7 +6,27 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed — every long AI turn died before it was sent
+
+- **The provider never streamed, so the SDK refused the request.** With a large
+  output budget a non-streaming call could exceed the 10-minute HTTP ceiling, and
+  the SDK rejects that up front rather than sending it: *"Streaming is required
+  for operations that may take longer than 10 minutes."* The turn died with no
+  output. The agentic roles run at `xhigh` effort, which is exactly the shape that
+  trips it, so in practice the planner failed every run. Turns now stream, and
+  text reaches the operator as it is generated instead of in one lump at the end.
+- **The output budget was sized to dodge that timeout, not to fit the work.** At
+  8192 tokens a planner at `xhigh` could spend the whole allowance thinking and
+  return a truncated plan. Streaming removes the ceiling, so the default is now
+  64000.
+- **A paused turn ended the run silently.** The SDK's tool runner does not resume
+  on `pause_turn` — it only continues after a tool returns a result — so a paused
+  turn ended the loop with no error and the truncated answer was reported as the
+  role's finished work. It now resumes.
+- **Added a test that drives the real provider** against a local server speaking
+  the Anthropic SSE format. The existing mesh tests all use a fake provider, so
+  nothing exercised the actual SDK call — the suite was green while every real
+  turn failed.
 
 ## [0.5.0] — 2026-08-04
 
