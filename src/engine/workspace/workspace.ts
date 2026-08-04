@@ -45,6 +45,12 @@ export const MAX_SEARCH_MATCHES = 200;
  */
 const DENIED_NAMES = new Set([
   'blobs',
+  // The project's own CA certificate. Serving it here made an otherwise-empty
+  // project directory report "1 document(s)", which read as an engagement folder
+  // with material in it when there was none — and suppressed the hint pointing
+  // at the folder where the material actually was. The CA has its own surface
+  // (status, export, install instructions); it is not engagement material.
+  'ca.pem',
   'node_modules',
   '.git',
   '.svn',

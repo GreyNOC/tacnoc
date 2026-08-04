@@ -6,7 +6,40 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed — opening a hunt folder, and finding the scope inside it
+
+Three separate defects that all presented to the operator as "the scope gate is
+closed" when the gate was doing exactly what it should. The gate is unchanged.
+
+- **Picking the hunt folder failed with `ENOENT ... belcher.db`.** Projects
+  normally live *inside* the hunt folder (`TiffanyCo/Tiffany.tacnocproj`), so
+  pointing the chooser at `TiffanyCo` is the natural thing to do. It failed by
+  naming an internal file the operator has no reason to know. Opening now
+  resolves a project nested one level down, names every candidate when a folder
+  holds more than one, and otherwise says what is actually wrong.
+- **The engagement folder defaulted to a directory with nothing in it.** The
+  default root is the project directory, which holds the database and no
+  documents — while every scope document sits one level up. The scope reader
+  then correctly reported "no readable documents" about a folder the operator
+  never put anything in. Preflight now detects this and names the parent, with a
+  one-click switch in Engagement. It only ever *suggests*: widening what leaves
+  the machine is the operator's call, made once, in the open.
+- **`ca.pem` counted as an engagement document.** Every project directory has
+  one, so an empty project folder reported "1 document(s)" — which read as a
+  folder with material in it, and suppressed the hint above. The CA has its own
+  surface; it is not engagement material, and is no longer served by the
+  workspace reader.
+
+### Fixed — a declined model turn no longer throws the run away
+
+- **A refusal on the recon turn aborted the entire run.** The engine had already
+  computed the readiness report, the enforced scope, the engagement folder
+  listing, and the ranked attack surface — none of which needs a model — and all
+  of it was discarded. A declined recon or planner turn now continues on that
+  engine-built briefing. The decline is recorded as a step, carried into the
+  reporter's prompt, and stated in the report's coverage: the run is never
+  presented as complete when a role did not run.
+
 
 ## [0.4.1] — 2026-08-04
 

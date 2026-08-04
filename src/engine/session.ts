@@ -13,6 +13,7 @@
 
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
+import * as path from 'node:path';
 import { mimeType, type HttpExchange } from '../shared/model.js';
 import type { ScopeConfig } from '../shared/scope.js';
 import type { EngineConfig } from '../shared/config.js';
@@ -29,7 +30,7 @@ import type { RepeaterOptions, RepeaterResult } from '../shared/repeater.js';
 import type { ProjectInfo, SavedRequest } from '../shared/project.js';
 import type { JobProgress, VariationPlan, VariationResultRow } from '../shared/variation.js';
 import type { InterceptState, RequestDecision, ResponseDecision } from '../shared/intercept.js';
-import { ProjectStore } from './project/projectStore.js';
+import { ProjectStore, resolveProjectDir } from './project/projectStore.js';
 import { ProxyServer, type CapturedWsMessage } from './proxy/proxyServer.js';
 import { Interceptor } from './proxy/interceptor.js';
 import { PassiveScanner } from './scanner/passiveScanner.js';
@@ -163,6 +164,7 @@ export class TacnocSession extends EventEmitter {
       onProgress: (p) => this.emit('mesh-progress', p),
       redactResult: (v) => redactAiValue(v, this.aiRedactor),
       logger: this.log,
+      briefing: () => this.engineBriefing(),
     });
     this.on('emergency-stop', () => this.mesh.stopAll());
   }
@@ -184,9 +186,21 @@ export class TacnocSession extends EventEmitter {
     this.wireProject();
   }
 
+  /**
+   * Open a project, accepting either the project directory itself or a hunt
+   * folder that contains one.
+   *
+   * Projects live inside the folder that holds the engagement — `TiffanyCo/
+   * Tiffany.tacnocproj` next to `ENGAGEMENT.md` and the notes. Pointing the
+   * open dialog at the hunt folder is the obvious thing to do, and it used to
+   * fail with a raw `ENOENT ... belcher.db` naming a file the operator had
+   * never heard of. Resolve it instead, and when the answer is genuinely
+   * ambiguous, name the candidates rather than guessing.
+   */
   async openProject(dir: string): Promise<void> {
+    const resolved = await resolveProjectDir(dir);
     await this.closeProject();
-    this.project = await ProjectStore.open(dir, this.secretStoreOpt(dir));
+    this.project = await ProjectStore.open(resolved, this.secretStoreOpt(resolved));
     this.wireProject();
   }
 
@@ -743,6 +757,7 @@ export class TacnocSession extends EventEmitter {
         fileCount: listing.fileCount,
         totalBytes: listing.totalBytes,
         notableFiles: listing.notableFiles,
+        ...(await this.suggestWorkspaceRoot(listing.fileCount)),
       };
     } catch (err) {
       return {
@@ -752,7 +767,118 @@ export class TacnocSession extends EventEmitter {
         totalBytes: 0,
         notableFiles: [],
         error: err instanceof Error ? err.message : String(err),
+        ...(await this.suggestWorkspaceRoot(0)),
       };
+    }
+  }
+
+  /**
+   * Everything the engine knows about this engagement, as text.
+   *
+   * This is the recon a run gets when the model declines to write one: readiness,
+   * the enforced scope, the engagement folder, and the ranked attack surface are
+   * all computed here, deterministically, from the project. Handing it over keeps
+   * a declined turn from costing the whole run.
+   */
+  async engineBriefing(): Promise<string> {
+    const lines: string[] = [
+      'ENGINE BRIEFING — produced by TACNOC itself, from the open project. Every fact below is ' +
+        'read from the project, not inferred.',
+      '',
+    ];
+
+    const scope = this.project?.scope ?? emptyScope();
+    const included = scope.include.filter((r) => r.enabled !== false);
+    lines.push('## Scope (enforced by the engine; out-of-scope requests are refused)');
+    lines.push(
+      included.length
+        ? included.map((r) => `- ${r.hostMatch}: ${r.host}`).join('\n')
+        : '- (empty — the fail-closed gate would refuse every request)',
+    );
+    const excluded = scope.exclude.filter((r) => r.enabled !== false);
+    if (excluded.length) {
+      lines.push('', '### Explicitly excluded');
+      lines.push(excluded.map((r) => `- ${r.hostMatch}: ${r.host}`).join('\n'));
+    }
+    lines.push('');
+
+    try {
+      const report = await this.getPreflight();
+      lines.push(`## Readiness: ${report.ready ? 'ready' : 'NOT ready — blockers below'}`);
+      for (const c of report.checks) {
+        lines.push(`- [${c.severity}] ${c.title}${c.detail ? ` — ${c.detail}` : ''}`);
+      }
+      lines.push('');
+    } catch {
+      /* readiness is best-effort here */
+    }
+
+    try {
+      const listing = await this.listWorkspace();
+      lines.push(`## Engagement folder: ${listing.root}`);
+      lines.push(
+        listing.fileCount
+          ? `${listing.fileCount} document(s): ${listing.notableFiles.slice(0, 20).join(', ')}`
+          : 'No readable documents. Read them with the workspace tools if this is wrong.',
+      );
+      lines.push('');
+    } catch {
+      /* folder is best-effort here */
+    }
+
+    try {
+      const ranking = this.rankAttackSurface(20);
+      lines.push('## Ranked attack surface (in-scope endpoints, best first)');
+      lines.push(
+        ranking.leads.length
+          ? ranking.leads
+              .map(
+                (l, i) =>
+                  `${i + 1}. ${l.methods.join('/')} ${l.site}${l.path} — ` +
+                  `${l.classes.map((c) => `${c.kind} (${c.because.join(', ')})`).join('; ') || 'no class signal'}` +
+                  ` [exchange ${l.exchangeId}]`,
+              )
+              .join('\n')
+          : 'No in-scope endpoints have been captured yet. Proxy some traffic through the target first.',
+      );
+      if (ranking.outOfScopeSkipped > 0) {
+        lines.push(`(${ranking.outOfScopeSkipped} captured endpoint(s) skipped as out of scope.)`);
+      }
+    } catch {
+      /* ranking is best-effort here */
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Look one level up when the configured root has nothing to read.
+   *
+   * The usual layout puts the project *inside* the hunt folder, next to the
+   * engagement material — so the default root (the project directory) holds the
+   * database and no documents, and everything worth reading is in the parent.
+   * That produced the worst possible failure: the scope gate correctly refused
+   * to open, having been pointed at a directory with no scope in it.
+   *
+   * This only ever *suggests*. Widening what leaves the machine is the
+   * operator's call, made once, in the open — it is not something to infer.
+   */
+  private async suggestWorkspaceRoot(
+    currentFileCount: number,
+  ): Promise<{ suggestedRoot?: string; suggestedFileCount?: number }> {
+    const project = this.requireProject();
+    // Only when the operator hasn't already chosen a folder, and the one in use
+    // is genuinely empty of readable material.
+    if (currentFileCount > 0) return {};
+    if (this.getEngagementProfile().workspaceDir.trim()) return {};
+    const parent = path.dirname(project.directory);
+    if (parent === project.directory) return {}; // filesystem root
+    try {
+      const listing = await listWorkspace(parent, { maxDepth: 2 });
+      if (listing.fileCount === 0) return {};
+      return { suggestedRoot: listing.root, suggestedFileCount: listing.fileCount };
+    } catch {
+      return {};
     }
   }
 

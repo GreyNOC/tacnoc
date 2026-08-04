@@ -18,7 +18,7 @@ import type {
   LlmProvider,
 } from '../../src/engine/ai/provider.js';
 import { delay } from '../../src/engine/util/rateLimit.js';
-import type { AiConfig, MeshRunStatus } from '../../src/shared/ai.js';
+import type { AiConfig, MeshRunStatus, MeshStep } from '../../src/shared/ai.js';
 import type { ScopeConfig } from '../../src/shared/scope.js';
 import type { AuditEntry } from '../../src/shared/project.js';
 
@@ -511,5 +511,107 @@ describe('AI egress redaction', () => {
     ) as { url: string };
     expect(out.url).not.toContain('SUPERSECRETCODE');
     expect(out.url).toContain('ok=1');
+  });
+});
+
+describe('a declined turn does not throw the run away', () => {
+  /** Declines the named roles the way the provider reports a refusal. */
+  class DecliningProvider implements LlmProvider {
+    readonly id = 'declining';
+    readonly roleLog: string[] = [];
+    readonly seenPrompts: string[] = [];
+    constructor(private readonly refuse: Set<string>) {}
+    async runAgent(o: AgentTurnOptions): Promise<AgentTurnResult> {
+      const role = /Your role: (\w+)/.exec(o.system)?.[1]?.toLowerCase() ?? 'unknown';
+      this.roleLog.push(role);
+      const last = o.messages[o.messages.length - 1];
+      this.seenPrompts.push(typeof last?.content === 'string' ? last.content : '');
+      if (this.refuse.has(role)) {
+        return { text: '', tokens: { input: 1, output: 0 }, stopReason: 'refusal' };
+      }
+      const text = role === 'analyst' ? 'triaged\nDONE' : `${role} finished`;
+      return { text, tokens: { input: 10, output: 5 }, stopReason: 'end_turn' };
+    }
+  }
+
+  const orchWith = (
+    refuse: string[],
+    briefing?: () => Promise<string>,
+  ): { orch: MeshOrchestrator; provider: DecliningProvider; steps: MeshStep[] } => {
+    const provider = new DecliningProvider(new Set(refuse));
+    const steps: MeshStep[] = [];
+    const orch = new MeshOrchestrator({
+      getScope: () => IN_SCOPE,
+      audit: () => {},
+      onStep: (s) => steps.push(s),
+      onProgress: () => {},
+      ...(briefing ? { briefing } : {}),
+    });
+    return { orch, provider, steps };
+  };
+
+  it('carries on past a declined recon turn using the engine briefing', async () => {
+    const { orch, provider, steps } = orchWith(
+      ['recon'],
+      async () => 'ENGINE BRIEFING: host x.test',
+    );
+    const progress = orch.start(
+      { objective: 'probe' },
+      { provider, config: baseConfig(), tools: makeTools(() => {}) },
+    );
+    const status = await waitForTerminal(orch, progress.runId);
+
+    // The run completes rather than erroring out on the first turn.
+    expect(status).toBe('done');
+    expect(provider.roleLog).toEqual(['recon', 'planner', 'attacker', 'analyst', 'reporter']);
+    // The planner was handed the engine's briefing in place of recon's summary.
+    expect(provider.seenPrompts[1]).toContain('ENGINE BRIEFING: host x.test');
+    // And the decline is stated, not buried.
+    expect(steps.some((s) => s.summary.includes('declined the recon turn'))).toBe(true);
+  });
+
+  it('reports the decline to the reporter so coverage is not overstated', async () => {
+    const { orch, provider } = orchWith(['recon'], async () => 'ENGINE BRIEFING');
+    const progress = orch.start(
+      { objective: 'probe' },
+      { provider, config: baseConfig(), tools: makeTools(() => {}) },
+    );
+    await waitForTerminal(orch, progress.runId);
+    const reporterPrompt = provider.seenPrompts[provider.seenPrompts.length - 1] ?? '';
+    expect(reporterPrompt).toMatch(/declined by the model/i);
+    expect(reporterPrompt).toContain('recon');
+  });
+
+  it('carries on past a declined planner turn too', async () => {
+    const { orch, provider, steps } = orchWith(['planner'], async () => 'ENGINE BRIEFING');
+    const progress = orch.start(
+      { objective: 'probe' },
+      { provider, config: baseConfig(), tools: makeTools(() => {}) },
+    );
+    expect(await waitForTerminal(orch, progress.runId)).toBe('done');
+    expect(provider.roleLog).toContain('attacker');
+    expect(steps.some((s) => s.summary.includes('declined the planning turn'))).toBe(true);
+  });
+
+  it('still runs when no briefing source is wired, falling back to the scope', async () => {
+    const { orch, provider } = orchWith(['recon']);
+    const progress = orch.start(
+      { objective: 'probe' },
+      { provider, config: baseConfig(), tools: makeTools(() => {}) },
+    );
+    expect(await waitForTerminal(orch, progress.runId)).toBe('done');
+    expect(provider.seenPrompts[1]).toContain('x.test');
+  });
+
+  it('does not let a failing briefing become the thing that kills the run', async () => {
+    const { orch, provider } = orchWith(['recon'], async () => {
+      throw new Error('project closed');
+    });
+    const progress = orch.start(
+      { objective: 'probe' },
+      { provider, config: baseConfig(), tools: makeTools(() => {}) },
+    );
+    expect(await waitForTerminal(orch, progress.runId)).toBe('done');
+    expect(provider.seenPrompts[1]).toContain('x.test');
   });
 });

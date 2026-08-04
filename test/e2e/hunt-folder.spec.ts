@@ -1,0 +1,108 @@
+/**
+ * The hunt-folder layout, through the real Electron runtime.
+ *
+ * The layout that actually occurs puts the project inside the hunt folder, next
+ * to the paperwork. Two failures came out of that and both presented as "the
+ * scope gate is closed": picking the hunt folder failed with a raw
+ * `ENOENT ... belcher.db`, and opening the project pointed the engagement folder
+ * at a directory holding the database and no documents.
+ *
+ * This drives it over IPC in the shipping runtime rather than under Vitest,
+ * because the folder chooser, the project open, and the preflight all cross the
+ * main-process boundary and a headless engine test would not exercise that.
+ *
+ * OPT-IN: requires `npm run build` first. Run with: npm run test:e2e
+ */
+
+import { test, expect, _electron as electron } from '@playwright/test';
+import * as path from 'node:path';
+import * as os from 'node:os';
+import { promises as fs } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+
+const ENGAGEMENT = [
+  '# Acme Bounty — engagement',
+  '',
+  '## In scope',
+  '- api.acme-corp.test',
+  '',
+  '## Out of scope',
+  '- internal.acme-corp.test',
+  '',
+].join('\n');
+
+test('a project nested in a hunt folder opens, and its scope is found', async () => {
+  const hunt = path.join(os.tmpdir(), `tacnoc-hunt-${Date.now()}`, 'AcmeCorp');
+  const projectDir = path.join(hunt, 'Acme.tacnocproj');
+  await fs.mkdir(hunt, { recursive: true });
+  await fs.writeFile(path.join(hunt, 'ENGAGEMENT.md'), ENGAGEMENT, 'utf8');
+
+  const app = await electron.launch({ args: [path.join(root, 'out/main/index.js')] });
+  try {
+    const win = await app.firstWindow();
+    await win.getByRole('button', { name: 'Create project' }).waitFor({ timeout: 20000 });
+
+    const result = await win.evaluate(
+      async ([huntDir, projDir]: string[]) => {
+        const b = (
+          window as unknown as {
+            tacnoc: { invoke: (m: string, ...a: unknown[]) => Promise<unknown> };
+          }
+        ).tacnoc;
+        const tryCall = async (method: string, ...args: unknown[]): Promise<string | null> => {
+          try {
+            await b.invoke(method, ...args);
+            return null;
+          } catch (e) {
+            return e instanceof Error ? e.message : String(e);
+          }
+        };
+
+        await b.invoke('createProject', projDir, 'acme');
+        await b.invoke('closeProject');
+
+        // The operator points the chooser at the hunt folder, not the project.
+        const openErr = await tryCall('openProject', huntDir);
+        const info = await b.invoke('getProjectInfo');
+
+        // Preflight should name the parent as the place the material lives.
+        const before = (await b.invoke('getPreflight')) as {
+          workspace: { root: string; fileCount: number; suggestedRoot?: string };
+        };
+
+        // Take the suggestion, the way the button does.
+        const profile = (await b.invoke('getEngagementProfile')) as Record<string, unknown>;
+        await b.invoke('setEngagementProfile', {
+          ...profile,
+          workspaceDir: before.workspace.suggestedRoot,
+        });
+
+        const proposal = (await b.invoke('proposeScopeFromWorkspace')) as {
+          filesRead: number;
+          include: { host: string }[];
+          exclude: { host: string }[];
+        };
+        return { openErr, info, before, proposal };
+      },
+      [hunt, projectDir],
+    );
+
+    // 1. Picking the hunt folder opens the project inside it.
+    expect(result.openErr).toBeNull();
+    expect((result.info as { name: string } | null)?.name).toBe('acme');
+
+    // 2. The engagement folder starts empty, and preflight says where to look.
+    expect(result.before.workspace.fileCount).toBe(0);
+    expect(result.before.workspace.suggestedRoot).toBe(hunt);
+
+    // 3. Taking the suggestion finds the scope that was in the folder all along.
+    expect(result.proposal.filesRead).toBeGreaterThan(0);
+    expect(result.proposal.include.map((c) => c.host)).toContain('api.acme-corp.test');
+    expect(result.proposal.exclude.map((c) => c.host)).toContain('internal.acme-corp.test');
+  } finally {
+    await app.close();
+    await fs.rm(path.dirname(hunt), { recursive: true, force: true }).catch(() => undefined);
+  }
+});

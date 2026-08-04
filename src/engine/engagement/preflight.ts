@@ -246,13 +246,19 @@ export function buildPreflight(inputs: PreflightInputs): PreflightReport {
       remedy: 'Point the workspace at the folder holding the program policy and engagement notes.',
     });
   } else if (inputs.workspace.fileCount === 0) {
+    const suggested = inputs.workspace.suggestedRoot;
     checks.push({
       id: 'workspace',
       title: 'The engagement folder has no readable documents',
       severity: 'warning',
-      detail:
-        'There is no program policy, scope document, or notes file to read, so planning rests on captured traffic alone.',
-      remedy: 'Drop the program policy and target notes into the engagement folder as text.',
+      detail: suggested
+        ? `${inputs.workspace.root} holds the project database and nothing to read, but ` +
+          `${suggested} contains ${inputs.workspace.suggestedFileCount ?? 0} document(s) — ` +
+          'the project was created inside the hunt folder, so the material is one level up.'
+        : 'There is no program policy, scope document, or notes file to read, so planning rests on captured traffic alone.',
+      remedy: suggested
+        ? `Set the engagement folder to ${suggested}. Everything in it becomes readable by the AI and is sent to the model provider, so check what is in there first.`
+        : 'Drop the program policy and target notes into the engagement folder as text.',
     });
   } else {
     checks.push({

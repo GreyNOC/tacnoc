@@ -43,15 +43,24 @@ test('ai mesh boots, key management + guards work, view renders', async () => {
     await b.invoke('setAiApiKey', 'sk-ant-smoke-not-a-real-key');
     const key1 = await b.invoke('getAiKeyStatus');
 
+    // A fresh project is fail-closed, and the empty-scope guard runs ahead of
+    // every other check — deliberately, since it is the likeliest thing missing
+    // and the one the operator can fix in a click. So exercise it first, then
+    // give the project scope so the later guards are the ones actually reached.
+    const scopeErr = await tryCall('startMeshRun', { objective: 'smoke' });
+    await b.invoke('setScope', {
+      include: [
+        { id: 'e2e', enabled: true, hostMatch: 'exact', host: 'x.test', schemes: [], ports: [] },
+      ],
+      exclude: [],
+    });
+
     // Default config has enabled=false → disabled guard.
     const disabledErr = await tryCall('startMeshRun', { objective: 'smoke' });
 
     const cfg = (await b.invoke('getAiConfig')) as Record<string, unknown>;
     await b.invoke('setAiConfig', { ...cfg, enabled: true, egressAcknowledged: false });
     const egressErr = await tryCall('startMeshRun', { objective: 'smoke' });
-
-    await b.invoke('setAiConfig', { ...cfg, enabled: true, egressAcknowledged: true });
-    const scopeErr = await tryCall('startMeshRun', { objective: 'smoke' });
 
     await b.invoke('clearAiApiKey');
     const key2 = await b.invoke('getAiKeyStatus');
@@ -61,12 +70,17 @@ test('ai mesh boots, key management + guards work, view renders', async () => {
   const cfg0 = result.cfg0 as {
     enabled: boolean;
     egressAcknowledged: boolean;
-    roles: Record<string, { model: string }>;
+    roles: Record<string, { model: string; effort?: string }>;
   };
   expect(cfg0.enabled).toBe(false);
   expect(cfg0.egressAcknowledged).toBe(false);
-  expect(cfg0.roles.planner?.model).toBe('claude-opus-4-8');
-  expect(cfg0.roles.analyst?.model).toBe('claude-haiku-4-5');
+  // Every role runs Opus by default; the split is effort, not model. The
+  // cheaper-analyst arrangement was dropped because a weak analyst manufactures
+  // false positives that cost real hours to disprove.
+  expect(cfg0.roles.planner?.model).toBe('claude-opus-5');
+  expect(cfg0.roles.analyst?.model).toBe('claude-opus-5');
+  expect(cfg0.roles.planner?.effort).toBe('xhigh');
+  expect(cfg0.roles.analyst?.effort).toBe('high');
   expect((result.key0 as { configured: boolean }).configured).toBe(false);
   expect((result.key1 as { configured: boolean }).configured).toBe(true);
   expect(result.disabledErr).toMatch(/disabled/i);

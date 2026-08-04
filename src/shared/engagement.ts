@@ -294,6 +294,17 @@ export interface WorkspaceSummary {
   notableFiles: string[];
   /** Set when the folder could not be read (missing, permissions). */
   error?: string;
+  /**
+   * A better root than the one in use, when one is obvious.
+   *
+   * A project normally lives INSIDE the hunt folder — `TiffanyCo/
+   * Tiffany.tacnocproj` next to `ENGAGEMENT.md` and the notes — so the default
+   * root (the project directory) contains the database and nothing to read,
+   * while every document sits one level up. Detecting that is the difference
+   * between "your folder has no scope in it" and finding the scope.
+   */
+  suggestedRoot?: string;
+  suggestedFileCount?: number;
 }
 
 export interface PreflightReport {

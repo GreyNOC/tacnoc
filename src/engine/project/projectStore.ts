@@ -375,3 +375,56 @@ function stripBodies(ex: HttpExchange): Omit<ExportedExchange, 'requestBody' | '
   }
   return base;
 }
+
+/**
+ * Resolve what the operator picked into an actual project directory.
+ *
+ * Accepts the project directory itself, or a folder containing exactly one
+ * project. A hunt folder normally looks like:
+ *
+ *   TiffanyCo/
+ *     ENGAGEMENT.md, SURFACE.md, _notes.md   <- the engagement material
+ *     Tiffany.tacnocproj/                    <- the project
+ *
+ * so pointing a directory picker at `TiffanyCo` is the natural thing to do.
+ * Failing that with `ENOENT ... belcher.db` names an internal file the operator
+ * has no reason to know about and gives them nothing to act on.
+ */
+export async function resolveProjectDir(dir: string): Promise<string> {
+  if (await hasProjectDb(dir)) return dir;
+
+  let entries: string[];
+  try {
+    entries = (await fs.readdir(dir, { withFileTypes: true }))
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+  } catch {
+    throw new Error(`Cannot read "${dir}".`);
+  }
+
+  const candidates: string[] = [];
+  for (const name of entries) {
+    if (await hasProjectDb(path.join(dir, name))) candidates.push(name);
+  }
+
+  if (candidates.length === 1) return path.join(dir, candidates[0] as string);
+  if (candidates.length > 1) {
+    throw new Error(
+      `"${path.basename(dir)}" contains ${candidates.length} projects — open the one you want ` +
+        `directly: ${candidates.join(', ')}.`,
+    );
+  }
+  throw new Error(
+    `"${path.basename(dir)}" is not a TACNOC project and does not contain one. ` +
+      `Choose a project folder, or create a new project here.`,
+  );
+}
+
+async function hasProjectDb(dir: string): Promise<boolean> {
+  try {
+    await fs.access(path.join(dir, DB_FILE));
+    return true;
+  } catch {
+    return false;
+  }
+}

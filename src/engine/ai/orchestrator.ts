@@ -94,6 +94,15 @@ export interface MeshOrchestratorDeps {
   /** Structural redaction applied to tool results when config.redactBeforeSend is on. */
   redactResult?: (value: unknown) => unknown;
   logger?: Logger;
+  /**
+   * A briefing the ENGINE can produce with no model involved: preflight,
+   * scope, the engagement folder, and the ranked attack surface.
+   *
+   * Used when the model declines a turn. A declined recon turn used to abort
+   * the whole run, which meant one refusal threw away work the engine had
+   * already done deterministically and could hand to the next role unchanged.
+   */
+  briefing?: () => Promise<string>;
 }
 
 export interface MeshRunContext {
@@ -212,14 +221,24 @@ export class MeshOrchestrator {
       { role: 'user', content: reconPrompt(plan) },
     ]);
     if (this.aborted(state)) return;
+    let reconText = reconResult.text;
     if (this.noteRefusal(runId, 'recon', reconResult, declined)) {
-      throw new Error(
-        'The model declined the recon turn, so the engagement was never reviewed. Nothing was tested. ' +
-          'Check the objective and the engagement material, then re-run.',
+      // The model declined to write the recon summary. The engine already knows
+      // the readiness state, the scope, the engagement folder, and the ranked
+      // surface — none of that needed a model — so hand that over and carry on
+      // rather than discarding the run.
+      reconText = await this.engineBriefing();
+      this.pushStep(
+        runId,
+        'recon',
+        'error',
+        'The model declined the recon turn. Continuing on the engine-built briefing ' +
+          '(preflight, scope, engagement folder, ranked surface) instead. Recon commentary is ' +
+          'missing from this run.',
       );
     }
-    if (isBlocked(reconResult.text)) {
-      state.report = reconResult.text;
+    if (isBlocked(reconText)) {
+      state.report = reconText;
       this.pushStep(
         runId,
         'recon',
@@ -231,12 +250,21 @@ export class MeshOrchestrator {
     }
 
     const planResult = await this.runRole(runId, ctx, 'planner', toolsFor('planner'), [
-      { role: 'user', content: plannerPrompt(plan, reconResult.text) },
+      { role: 'user', content: plannerPrompt(plan, reconText) },
     ]);
     if (this.aborted(state)) return;
+    let planText = planResult.text;
     if (this.noteRefusal(runId, 'planner', planResult, declined)) {
-      throw new Error(
-        'The model declined the planning turn, so there is no test plan and nothing was tested.',
+      // Same reasoning as recon: the ranked attack surface is a real, ordered
+      // list of where to look, computed by the engine. Better to work it than to
+      // discard the run.
+      planText = await this.engineBriefing();
+      this.pushStep(
+        runId,
+        'planner',
+        'error',
+        'The model declined the planning turn. Falling back to the engine-ranked attack surface. ' +
+          'There is no model-written test plan in this run.',
       );
     }
 
@@ -252,7 +280,7 @@ export class MeshOrchestrator {
       const attackResult = await this.runRole(runId, ctx, 'attacker', toolsFor('attacker'), [
         {
           role: 'user',
-          content: attackerPrompt(plan, planResult.text, analysis, ctx.config.autonomy),
+          content: attackerPrompt(plan, planText, analysis, ctx.config.autonomy),
         },
       ]);
       if (this.aborted(state)) return;
@@ -269,7 +297,7 @@ export class MeshOrchestrator {
     if (this.aborted(state)) return;
 
     const reportResult = await this.runRole(runId, ctx, 'reporter', toolsFor('reporter'), [
-      { role: 'user', content: reporterPrompt(plan, reconResult.text, analysis, declined) },
+      { role: 'user', content: reporterPrompt(plan, reconText, analysis, declined) },
     ]);
     state.report = reportResult.text;
     this.pushStep(runId, 'reporter', 'finding', 'Engagement report ready.');
@@ -331,6 +359,37 @@ export class MeshOrchestrator {
       );
     }
     return { text: result.text, stopReason: result.stopReason };
+  }
+
+  /**
+   * The engine's own briefing, for when a model turn is declined.
+   *
+   * Deliberately never throws: it exists to keep a run alive on deterministic
+   * data, so a failure to build it must not become the thing that kills the run.
+   */
+  private async engineBriefing(): Promise<string> {
+    const scope = this.deps.getScope();
+    const hosts = scope.include
+      .filter((r) => r.enabled !== false)
+      .map((r) => r.host)
+      .join(', ');
+    const fallback =
+      `ENGINE BRIEFING (no model recon was produced for this run).
+
+` +
+      `In-scope hosts: ${hosts || '(none)'}
+` +
+      `Every request is checked against this scope by the engine and refused if it falls outside.`;
+    if (!this.deps.briefing) return fallback;
+    try {
+      const text = (await this.deps.briefing()).trim();
+      return text || fallback;
+    } catch (err) {
+      this.deps.logger?.warn?.('mesh: engine briefing failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return fallback;
+    }
   }
 
   /**

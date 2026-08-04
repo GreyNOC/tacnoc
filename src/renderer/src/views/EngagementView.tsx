@@ -486,6 +486,29 @@ export function EngagementView(): JSX.Element {
               {report.workspace.fileCount} document(s) · {report.workspace.notableFiles.join(', ')}
             </p>
           ) : null}
+          {report?.workspace.suggestedRoot ? (
+            <div className="banner warn" style={{ marginTop: 10 }}>
+              <div>
+                Nothing to read here — this folder holds the project database and no documents. The
+                project sits inside <span className="mono">{report.workspace.suggestedRoot}</span>,
+                which has {report.workspace.suggestedFileCount ?? 0} document(s) in it. That is
+                almost certainly where your engagement material is.
+              </div>
+              <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>
+                Everything in that folder becomes readable by the AI and is sent to the model
+                provider during a run. Check what is in it before switching.
+              </div>
+              <button
+                className="ghost"
+                style={{ marginTop: 8 }}
+                onClick={() =>
+                  void save({ ...profile, workspaceDir: report.workspace.suggestedRoot as string })
+                }
+              >
+                Use that folder
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {/* ---- certificate lifecycle ---- */}
