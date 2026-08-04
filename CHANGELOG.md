@@ -6,6 +6,10 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.4.3] — 2026-08-04
+
 ### Fixed — a project created by one build could not be opened by another
 
 - **The app had no stable identity, and that made projects unopenable.** Electron
