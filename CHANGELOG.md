@@ -6,6 +6,10 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.5.1] — 2026-08-04
+
 ### Fixed — every long AI turn died before it was sent
 
 - **The provider never streamed, so the SDK refused the request.** With a large
