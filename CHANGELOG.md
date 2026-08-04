@@ -6,6 +6,34 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.4.2] — 2026-08-04
+
+### Fixed — findings from the pre-release adversarial review
+
+- **The consent figure understated what egresses.** The suggested-folder document
+  count was measured two levels deep while the workspace reader walks eight, so the
+  operator agreed to a smaller number than the run actually sends. The preview now
+  walks at the depth the reader uses.
+- **A declined recon turn dropped the preflight halt.** Recon stops a run by
+  answering `BLOCKED:`; substituting the engine briefing for a declined turn lost
+  that, and a run could test an engagement preflight had already called not-ready
+  with nobody having reviewed it. The briefing now carries the halt itself — the
+  engine knows the blockers and does not need a model to decide this one.
+- **A declined reporting turn produced a blank report and still finished `done`.**
+  A run that had sent real traffic presented as a completed engagement with an
+  empty report. It now states that no report was written, names every declined
+  role, and returns the unreviewed round-by-round analysis rather than losing it.
+- **Emergency stop could be missed while the briefing was being built.** The
+  awaited gap had no abort check, so a stop landing inside it was not seen until
+  the next role had already been dispatched.
+- **Switching engagement folders left the scope card showing its old result.** The
+  proposal was never re-read, so clicking the button meant to find your scope left
+  the card still reporting nothing found, relabelled with the new path.
+- **The suggestion banner rendered unstyled** — it used `banner warn`, and neither
+  class exists in the stylesheet.
+
 ### Fixed — opening a hunt folder, and finding the scope inside it
 
 Three separate defects that all presented to the operator as "the scope gate is

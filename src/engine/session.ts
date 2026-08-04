@@ -802,8 +802,10 @@ export class TacnocSession extends EventEmitter {
     }
     lines.push('');
 
+    let blockers: string[] = [];
     try {
       const report = await this.getPreflight();
+      blockers = report.checks.filter((c) => c.severity === 'blocker').map((c) => c.title);
       lines.push(`## Readiness: ${report.ready ? 'ready' : 'NOT ready — blockers below'}`);
       for (const c of report.checks) {
         lines.push(`- [${c.severity}] ${c.title}${c.detail ? ` — ${c.detail}` : ''}`);
@@ -848,6 +850,21 @@ export class TacnocSession extends EventEmitter {
       /* ranking is best-effort here */
     }
 
+    // A recon turn that spots a blocker halts the run by answering `BLOCKED: …`.
+    // When the model declines and this briefing stands in for recon, that halt
+    // has to come from here or it is silently lost — and the run would test an
+    // engagement that preflight already said was not ready, with nobody having
+    // reviewed it. The engine knows the blockers; it does not need a model to
+    // decide this one.
+    if (blockers.length) {
+      return [
+        `BLOCKED: preflight reports ${blockers.length} blocker(s) and no recon review was ` +
+          `produced for this run: ${blockers.join('; ')}. Nothing was tested. Clear the blockers ` +
+          `in Engagement and re-run.`,
+        '',
+        ...lines,
+      ].join('\n');
+    }
     return lines.join('\n');
   }
 
@@ -874,7 +891,12 @@ export class TacnocSession extends EventEmitter {
     const parent = path.dirname(project.directory);
     if (parent === project.directory) return {}; // filesystem root
     try {
-      const listing = await listWorkspace(parent, { maxDepth: 2 });
+      // Walk at the SAME depth the workspace reader uses once the folder is
+      // adopted. Counting a shallower tree understated the consent figure: the
+      // banner said "12 document(s)" and switching then exposed everything down
+      // to MAX_DEPTH. The number the operator agrees to has to be the number
+      // that egresses.
+      const listing = await listWorkspace(parent);
       if (listing.fileCount === 0) return {};
       return { suggestedRoot: listing.root, suggestedFileCount: listing.fileCount };
     } catch {

@@ -76,8 +76,20 @@ export function EngagementView(): JSX.Element {
       .then(setProfile)
       .catch(() => undefined);
     void refresh();
-    void readProposal();
-  }, [refresh, readProposal]);
+  }, [refresh]);
+
+  /**
+   * Re-read the folder whenever the root actually changes.
+   *
+   * Switching folders — by the suggestion button, by "Choose…", or by typing a
+   * path — used to leave the Proposed-scope card showing its PRE-switch result
+   * under the POST-switch path, because save() refreshed preflight but never
+   * re-read the proposal. The operator clicked the button that was supposed to
+   * find their scope and the card still said it had found nothing.
+   */
+  useEffect(() => {
+    if (report?.workspace.root) void readProposal();
+  }, [report?.workspace.root, readProposal]);
 
   const save = async (next: EngagementProfile): Promise<void> => {
     setProfile(next);
@@ -487,7 +499,7 @@ export function EngagementView(): JSX.Element {
             </p>
           ) : null}
           {report?.workspace.suggestedRoot ? (
-            <div className="banner warn" style={{ marginTop: 10 }}>
+            <div className="warn-box" style={{ marginTop: 10 }}>
               <div>
                 Nothing to read here — this folder holds the project database and no documents. The
                 project sits inside <span className="mono">{report.workspace.suggestedRoot}</span>,

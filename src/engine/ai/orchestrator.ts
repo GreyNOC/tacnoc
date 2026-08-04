@@ -228,6 +228,9 @@ export class MeshOrchestrator {
       // surface — none of that needed a model — so hand that over and carry on
       // rather than discarding the run.
       reconText = await this.engineBriefing();
+      // Building the briefing is an awaited gap. Emergency stop landing inside it
+      // was not seen until the NEXT role had already been dispatched.
+      if (this.aborted(state)) return;
       this.pushStep(
         runId,
         'recon',
@@ -259,6 +262,7 @@ export class MeshOrchestrator {
       // list of where to look, computed by the engine. Better to work it than to
       // discard the run.
       planText = await this.engineBriefing();
+      if (this.aborted(state)) return;
       this.pushStep(
         runId,
         'planner',
@@ -299,8 +303,28 @@ export class MeshOrchestrator {
     const reportResult = await this.runRole(runId, ctx, 'reporter', toolsFor('reporter'), [
       { role: 'user', content: reporterPrompt(plan, reconText, analysis, declined) },
     ]);
-    state.report = reportResult.text;
-    this.pushStep(runId, 'reporter', 'finding', 'Engagement report ready.');
+    if (this.noteRefusal(runId, 'reporter', reportResult, declined)) {
+      // A declined reporter used to leave state.report as the empty string and
+      // still finish 'done' — a run that had actually sent traffic presenting as
+      // a completed engagement with a blank report. Say what happened, and hand
+      // back the analysis the earlier rounds did produce so the work is not lost.
+      state.report =
+        'NO REPORT WAS WRITTEN — the model declined the reporting turn.\n\n' +
+        `Roles the model declined in this run: ${declined.join(', ')}.\n` +
+        'Do not read this run as a completed engagement. The raw analysis from each round ' +
+        'follows; every claim in it is unreviewed and none of it has been through the proof ' +
+        `gate.\n\n${analysis.trim() || '(no analysis was produced)'}`;
+      this.pushStep(
+        runId,
+        'reporter',
+        'error',
+        'The model declined the reporting turn. The run is NOT a completed engagement; the ' +
+          'unreviewed round-by-round analysis is returned in place of a report.',
+      );
+    } else {
+      state.report = reportResult.text;
+      this.pushStep(runId, 'reporter', 'finding', 'Engagement report ready.');
+    }
     this.finish(runId, 'done');
   }
 
