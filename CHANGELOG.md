@@ -6,7 +6,52 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed — scope gate wiring
+
+- **A `*.host` line from a policy produced a rule that matched only ONE label.**
+  TACNOC's glob gives `*` the meaning "exactly one label", so a policy listing
+  `*.example.com` became a rule that matched `api.example.com` and silently
+  refused `api.eu.example.com` — the operator believing a host was in scope
+  that the gate rejected. Proposals now translate to `**.host` (one or more
+  labels) and are verified against the real evaluator. The apex is deliberately
+  NOT added: a policy listing only `*.example.com` has not authorized
+  `example.com`, and erring toward refusing costs a moment where erring toward
+  permitting is an unauthorized request.
+- **`propose_scope_from_workspace` ignored the workspace-access switch.** It sat
+  outside the gate, so the mesh could read the engagement folder — and egress
+  its host names and evidence lines — with folder access turned off. It is now
+  gated with the rest of the workspace tools.
+- **The manual Add-rule form defaulted to `subdomain` matching.** Typing an apex
+  host silently put every subdomain at any depth in scope — the one error
+  direction that *permits* rather than refuses. It now defaults to `exact`;
+  widening is a dropdown away and should be deliberate.
+- **The mesh start guard counted include rules without checking `enabled`.** A
+  project whose rules were all switched off passed the guard, started a run, and
+  had every request refused — provider tokens spent rediscovering what the guard
+  already knew.
+- **The API-key error masked the empty-scope error.** Scope is checked first
+  now: it is the safety gate, the likelier thing missing on a fresh engagement,
+  and the one fixable in a click. The refusal names the hosts your folder
+  contains rather than telling you to go add some.
+- **Preflight dropped ambiguous folder hosts.** A hunt folder is usually a bare
+  asset list with no "In scope" heading, so every host landed in `unclear` and
+  preflight reported nothing — about a folder that plainly named the targets.
+  Ambiguous candidates are now reported too; the operator still ticks each one.
+- Rule construction moved out of the React view into the engine
+  (`scopeRulesFromProposal`), where it is tested against `evaluateScope`. It
+  decides what the safety gate permits, so it should not have been eyeballed
+  inside a component.
+
+### Added
+
+- The Engagement view now says what it is doing while reading the folder —
+  which directory it is searching, how many documents it read, and how many
+  hosts were in scope, excluded, or unclear. A folder that cannot be read
+  reports the error instead of silently showing nothing, which was
+  indistinguishable from "your folder has no scope in it".
+- The Scope view's fail-closed banner points at Engagement → Proposed scope
+  when the include list is empty, so the feature is discoverable from the
+  screen where the problem is actually noticed.
 
 ## [0.4.0] — 2026-08-03
 

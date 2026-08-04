@@ -978,7 +978,13 @@ export class TacnocSession extends EventEmitter {
     let proposedScopeHosts: string[] = [];
     if (project.scope.include.filter((r) => r.enabled !== false).length === 0) {
       try {
-        proposedScopeHosts = (await this.proposeScopeFromWorkspace()).include.map((c) => c.host);
+        const proposal = await this.proposeScopeFromWorkspace();
+        // Include the AMBIGUOUS candidates too. Most hunt folders are a bare
+        // list of assets with no "In scope" heading above them, so everything
+        // lands in `unclear` — and reporting only the confidently-classified
+        // ones made preflight say "nothing found" about a folder that plainly
+        // names the targets. The operator still ticks each one.
+        proposedScopeHosts = [...proposal.include, ...proposal.unclear].map((c) => c.host);
       } catch {
         proposedScopeHosts = [];
       }
@@ -1052,9 +1058,42 @@ export class TacnocSession extends EventEmitter {
     if (this.aiSecretStore) await this.aiSecretStore.delete(TacnocSession.AI_KEY);
   }
 
+  /**
+   * The empty-scope refusal, naming what the engagement folder contains.
+   *
+   * "Scope is empty, add hosts" is a dead end when the operator's own program
+   * policy — sitting in the folder the app can already read — lists every asset.
+   * Reading the folder here costs one pass over a handful of documents and only
+   * happens on a refusal.
+   */
+  private async emptyScopeMessage(): Promise<string> {
+    const base =
+      'Scope is empty (fail-closed): add at least one ENABLED in-scope host before running the ' +
+      'mesh — every request would otherwise be refused.';
+    try {
+      const proposal = await this.proposeScopeFromWorkspace();
+      const hosts = [...proposal.include, ...proposal.unclear].map((c) => c.host);
+      if (!hosts.length) return `${base} No hosts were found in the engagement folder either.`;
+      return (
+        `${base} Your engagement folder names ${hosts.length} host(s): ` +
+        `${hosts.slice(0, 6).join(', ')}${hosts.length > 6 ? `, +${hosts.length - 6} more` : ''}. ` +
+        'Open Engagement → Proposed scope to check them against the program page and add them.'
+      );
+    } catch {
+      return `${base} If your program policy is in the engagement folder, Engagement → Proposed scope reads the hosts out of it.`;
+    }
+  }
+
   /** Start a closed-loop mesh run. The API key is read here, main-side, and never leaves. */
   async startMeshRun(plan: MeshRunPlan): Promise<MeshRunProgress> {
-    this.requireProject();
+    const project = this.requireProject();
+    // Scope is checked FIRST, ahead of the key. Both are blockers, but this one
+    // is the safety gate, it is the likelier thing to be missing on a fresh
+    // engagement, and it is fixable in one click from the folder — whereas the
+    // key error masking it sent the operator to the wrong screen entirely.
+    if (project.scope.include.filter((r) => r.enabled !== false).length === 0) {
+      throw new Error(await this.emptyScopeMessage());
+    }
     if (!this.aiSecretStore) throw new Error('No secret store is configured for AI keys.');
     const key = await this.aiSecretStore.get(TacnocSession.AI_KEY);
     if (key === null) {

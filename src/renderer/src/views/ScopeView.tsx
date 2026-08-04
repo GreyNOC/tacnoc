@@ -7,7 +7,11 @@ function newRule(): ScopeRule {
   return {
     id: crypto.randomUUID(),
     enabled: true,
-    hostMatch: 'subdomain',
+    // 'exact', not 'subdomain'. Typing an apex host and getting every subdomain
+    // at any depth silently grants more than the operator asked for, and scope
+    // is the boundary that decides whether a request is authorized. Widening is
+    // one dropdown away and should be a deliberate act.
+    hostMatch: 'exact',
     host: '',
     schemes: [],
     ports: [],
@@ -125,6 +129,23 @@ export function ScopeView(): JSX.Element {
         <div className="warn-box">
           Scope is fail-closed: with no include rules, nothing is in scope and automated request
           generation is blocked. Add hosts you are <strong>authorized</strong> to test.
+          {scope.include.length === 0 && (
+            <>
+              {' '}
+              If your program policy or scope document is in the engagement folder,{' '}
+              <a
+                href="#engagement"
+                onClick={(e) => {
+                  e.preventDefault();
+                  s.setView('engagement');
+                }}
+              >
+                Engagement → Proposed scope
+              </a>{' '}
+              reads the hosts out of it — with the line each came from — so you can tick and add
+              them instead of retyping the list.
+            </>
+          )}
         </div>
 
         <div className="card">

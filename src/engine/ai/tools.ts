@@ -217,6 +217,15 @@ function workspaceTools(session: TacnocSession, grants: ToolGrants): ToolSpec[] 
         ),
     },
     {
+      name: 'propose_scope_from_workspace',
+      description:
+        'Read the engagement documents and list the hosts they describe as in scope, out of scope, or ambiguous, each with the file and line it came from. Read-only — it CANNOT change scope, and a document is not authorization. Use it during recon to report what the paperwork says and to tell the operator exactly what to add when scope is empty.',
+      inputSchema: OBJECT({}),
+      effect: 'read',
+      mutates: false,
+      handler: async () => session.proposeScopeFromWorkspace(),
+    },
+    {
       name: 'search_workspace',
       description:
         'Case-insensitive substring search across the readable engagement documents, returning file, line number, and the matching line. Read-only. Use it to find where a host, endpoint, handle, or rule is mentioned without reading every file.',
@@ -492,15 +501,6 @@ export function buildTools(session: TacnocSession, grants: ToolGrants): ToolSpec
       effect: 'read',
       mutates: false,
       handler: async () => session.getPreflight(),
-    },
-    {
-      name: 'propose_scope_from_workspace',
-      description:
-        'Read the engagement documents and list the hosts they describe as in scope, out of scope, or ambiguous, each with the file and line it came from. Read-only — it CANNOT change scope, and a document is not authorization. Use it during recon to report what the paperwork says and to tell the operator exactly what to add when scope is empty.',
-      inputSchema: OBJECT({}),
-      effect: 'read',
-      mutates: false,
-      handler: async () => session.proposeScopeFromWorkspace(),
     },
     {
       name: 'get_engagement_profile',

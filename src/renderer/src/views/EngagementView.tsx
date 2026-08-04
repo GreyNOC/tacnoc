@@ -11,7 +11,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.js';
-import type { ScopeProposal } from '@engine/engagement/scopeProposal.js';
+import { scopeRulesFromProposal, type ScopeProposal } from '@engine/engagement/scopeProposal.js';
 import type { ScopeConfig, ScopeRule } from '@shared/scope.js';
 import {
   defaultEngagementProfile,
@@ -38,6 +38,8 @@ export function EngagementView(): JSX.Element {
   const [report, setReport] = useState<PreflightReport | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [proposal, setProposal] = useState<ScopeProposal | undefined>(undefined);
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | undefined>(undefined);
   const [picked, setPicked] = useState<Set<string>>(new Set());
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -49,14 +51,22 @@ export function EngagementView(): JSX.Element {
   }, [setToast]);
 
   const readProposal = useCallback(async (): Promise<void> => {
+    setScanning(true);
+    setScanError(undefined);
     try {
       const found = await api.proposeScopeFromWorkspace();
       setProposal(found);
       // Pre-tick only the hosts the documents call in-scope; the operator still
       // confirms. Excluded and ambiguous hosts are never pre-selected.
       setPicked(new Set(found.include.map((c) => c.host)));
-    } catch {
+    } catch (err) {
+      // Say why. Silently showing nothing is indistinguishable from "your
+      // folder has no scope in it", which sends the operator looking in the
+      // wrong place.
       setProposal(undefined);
+      setScanError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setScanning(false);
     }
   }, []);
 
@@ -69,56 +79,6 @@ export function EngagementView(): JSX.Element {
     void readProposal();
   }, [refresh, readProposal]);
 
-  /**
-   * Add the ticked hosts to project scope. Deliberately additive and
-   * operator-driven: nothing here is applied automatically, existing rules are
-   * preserved, and hosts the documents marked out-of-scope go in as EXCLUDE
-   * rules rather than being silently dropped.
-   */
-  const addSelectedToScope = async (): Promise<void> => {
-    if (!proposal || picked.size === 0) return;
-    setBusy(true);
-    try {
-      const current: ScopeConfig = await api.getScope();
-      const have = new Set(current.include.map((r) => r.host.toLowerCase()));
-      const haveExcluded = new Set(current.exclude.map((r) => r.host.toLowerCase()));
-      const mkRule = (host: string, idx: number, kind: 'include' | 'exclude'): ScopeRule => ({
-        id: `${kind}-ws-${Date.now()}-${idx}`,
-        enabled: true,
-        hostMatch: host.startsWith('*.') ? 'wildcard' : 'exact',
-        host,
-        schemes: [],
-        ports: [],
-        label: 'from engagement folder',
-      });
-
-      const include = [...current.include];
-      const exclude = [...current.exclude];
-      let added = 0;
-      [...proposal.include, ...proposal.unclear]
-        .filter((c) => picked.has(c.host) && !have.has(c.host.toLowerCase()))
-        .forEach((c) => {
-          include.push(mkRule(c.host, include.length, 'include'));
-          added += 1;
-        });
-      // Anything the documents call out-of-scope is added as an exclusion, so a
-      // wildcard include cannot silently swallow it later.
-      proposal.exclude
-        .filter((c) => !haveExcluded.has(c.host.toLowerCase()))
-        .forEach((c) => exclude.push(mkRule(c.host, exclude.length, 'exclude')));
-
-      await api.setScope({ include, exclude });
-      setToast(
-        `Added ${added} host(s) to scope and ${exclude.length - current.exclude.length} exclusion(s). Verify against the program page.`,
-      );
-      await refresh();
-    } catch (err) {
-      setToast(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const save = async (next: EngagementProfile): Promise<void> => {
     setProfile(next);
     try {
@@ -128,6 +88,37 @@ export function EngagementView(): JSX.Element {
     } catch (err) {
       // The engine refuses an invalid profile outright — surface exactly why.
       setToast(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  /**
+   * Add the ticked hosts to project scope.
+   *
+   * The rule construction lives in the engine (`scopeRulesFromProposal`) and is
+   * tested against the real evaluator, because it decides what the safety gate
+   * will permit — in particular it translates a policy's `*.host` into a rule
+   * that matches subdomains at any depth without silently widening to the apex.
+   */
+  const addSelectedToScope = async (): Promise<void> => {
+    if (!proposal || picked.size === 0) return;
+    setBusy(true);
+    try {
+      const current: ScopeConfig = await api.getScope();
+      const { include, exclude } = scopeRulesFromProposal(proposal, picked, current);
+      await api.setScope({
+        include: [...current.include, ...(include as unknown as ScopeRule[])],
+        exclude: [...current.exclude, ...(exclude as unknown as ScopeRule[])],
+      });
+      setToast(
+        `Added ${include.length} host(s) to scope` +
+          (exclude.length ? ` and ${exclude.length} exclusion(s)` : '') +
+          '. Verify each against the program page.',
+      );
+      await refresh();
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -215,12 +206,21 @@ export function EngagementView(): JSX.Element {
         <div className="card">
           <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
             <h3 style={{ margin: 0 }}>Proposed scope (from the engagement folder)</h3>
-            <button className="ghost" onClick={() => void readProposal()}>
-              Re-read folder
+            <button className="ghost" disabled={scanning} onClick={() => void readProposal()}>
+              {scanning ? 'Searching…' : 'Re-read folder'}
             </button>
           </div>
 
-          {!proposal && <p style={{ opacity: 0.7 }}>reading…</p>}
+          <p className="mono" style={{ fontSize: 12, opacity: 0.85 }}>
+            {scanning
+              ? `Searching ${report?.workspace.root ?? 'the engagement folder'} for scope…`
+              : scanError
+                ? `Could not read the engagement folder: ${scanError}`
+                : proposal
+                  ? `Read ${proposal.filesRead} document(s) in ${report?.workspace.root ?? 'the engagement folder'} — ` +
+                    `${proposal.include.length} in scope, ${proposal.exclude.length} excluded, ${proposal.unclear.length} unclear.`
+                  : 'not read yet'}
+          </p>
 
           {proposal && (
             <>

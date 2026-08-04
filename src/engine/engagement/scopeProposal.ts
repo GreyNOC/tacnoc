@@ -304,3 +304,73 @@ export function proposeScope(sources: ProposalSource[]): ScopeProposal {
 
   return { include, exclude, unclear, filesRead, notes };
 }
+
+// ---- turning proposals into scope rules -------------------------------------
+
+/**
+ * Build the scope rules for a set of ticked candidates.
+ *
+ * This lives in the engine, not the view, for one reason: it decides what the
+ * safety gate will and will not permit, so it has to be testable against the
+ * real evaluator rather than eyeballed inside a React component.
+ *
+ * The wildcard translation is the part that matters. A policy writes
+ * `*.example.com` to mean "subdomains of example.com", and TACNOC's glob gives
+ * `*` the meaning "exactly one label" — so a literal `*.example.com` rule would
+ * match `api.example.com` and silently REFUSE `api.eu.example.com`, leaving the
+ * operator believing a host is in scope that the gate rejects. It is translated
+ * to `**.example.com` (one or more labels) instead.
+ *
+ * It deliberately does NOT widen to the apex. `subdomain` matching would also
+ * put `example.com` itself in scope, and a policy that lists only `*.example.com`
+ * has not authorized the apex. Erring toward refusing a request costs a moment;
+ * erring toward permitting one is an unauthorized request.
+ */
+export function scopeRulesFromProposal(
+  proposal: ScopeProposal,
+  selectedHosts: Iterable<string>,
+  existing: { include: { host: string }[]; exclude: { host: string }[] },
+  makeId: () => string = () =>
+    `ws-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`,
+): { include: ScopeRuleDraft[]; exclude: ScopeRuleDraft[] } {
+  const picked = new Set([...selectedHosts].map((h) => h.trim().toLowerCase()));
+  const haveInclude = new Set(existing.include.map((r) => r.host.trim().toLowerCase()));
+  const haveExclude = new Set(existing.exclude.map((r) => r.host.trim().toLowerCase()));
+
+  const toRule = (candidate: ScopeCandidate): ScopeRuleDraft => {
+    const wildcard = candidate.host.startsWith('*.');
+    const host = wildcard ? `**.${candidate.host.slice(2)}` : candidate.host;
+    return {
+      id: makeId(),
+      enabled: true,
+      hostMatch: wildcard ? 'wildcard' : 'exact',
+      host,
+      schemes: [],
+      ports: [],
+      label: `from ${candidate.evidence[0]?.file ?? 'engagement folder'}`,
+    };
+  };
+
+  // Only hosts the operator ticked become includes. Excluded candidates are
+  // added regardless of the ticks — an exclusion the operator declines to add
+  // is an exclusion that silently stops applying.
+  const include = [...proposal.include, ...proposal.unclear]
+    .filter((c) => picked.has(c.host.toLowerCase()) && !haveInclude.has(c.host.toLowerCase()))
+    .map(toRule);
+  const exclude = proposal.exclude
+    .filter((c) => !haveExclude.has(c.host.toLowerCase()))
+    .map(toRule);
+
+  return { include, exclude };
+}
+
+/** The shape `ScopeRule` requires, without importing the renderer's types here. */
+export interface ScopeRuleDraft {
+  id: string;
+  enabled: boolean;
+  hostMatch: 'exact' | 'subdomain' | 'wildcard';
+  host: string;
+  schemes: never[];
+  ports: never[];
+  label: string;
+}

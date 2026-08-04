@@ -128,10 +128,15 @@ export class MeshOrchestrator {
     if (!plan.objective || !plan.objective.trim()) {
       throw new Error('Provide a testing objective for the mesh run.');
     }
-    if (this.deps.getScope().include.length === 0) {
+    // Count only ENABLED rules, the same way the evaluator does. Counting all
+    // of them let a project whose include rules were switched off start a run
+    // that then had every single request refused — provider tokens spent to
+    // rediscover a fact the guard already had.
+    if (this.deps.getScope().include.filter((r) => r.enabled !== false).length === 0) {
       throw new Error(
-        'Scope is empty (fail-closed): add at least one in-scope host before running the mesh — ' +
-          'every request would otherwise be refused.',
+        'Scope is empty (fail-closed): add at least one ENABLED in-scope host before running the ' +
+          'mesh — every request would otherwise be refused. If your program policy is in the ' +
+          'engagement folder, Engagement → Proposed scope reads the hosts out of it.',
       );
     }
 

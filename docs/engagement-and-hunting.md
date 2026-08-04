@@ -117,6 +117,16 @@ It proposes and never applies:
 - Hosts with no scope wording nearby are listed as **unclear** and are not
   pre-selected.
 - The bounty platform's own domains and common linked sites are never proposed.
+- A policy's `*.example.com` becomes a rule matching subdomains at **any depth**
+  (`api.example.com`, `api.eu.example.com`) but **not the apex** `example.com`,
+  which a policy listing only the wildcard has not authorized. The conversion
+  lives in the engine and is tested against the real scope evaluator, because it
+  decides what the gate will permit.
+
+While it reads, the view names the directory it is searching and reports what it
+found — documents read, hosts in scope, excluded, and unclear. A folder that
+cannot be read says so rather than showing an empty list, which is otherwise
+indistinguishable from "there is no scope in your folder".
 
 Recon reports the same list (`propose_scope_from_workspace`, read-only), and the
 empty-scope preflight blocker names the hosts it found rather than only telling

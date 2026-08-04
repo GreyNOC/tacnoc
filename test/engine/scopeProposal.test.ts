@@ -7,7 +7,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { proposeScope } from '../../src/engine/engagement/scopeProposal.js';
+import { proposeScope, scopeRulesFromProposal } from '../../src/engine/engagement/scopeProposal.js';
+import { evaluateScope } from '../../src/engine/scope/scope.js';
+import type { ScopeConfig, ScopeRule } from '../../src/shared/scope.js';
 
 const doc = (content: string, path = 'program-policy.md') => [{ path, content }];
 
@@ -117,5 +119,101 @@ See notes.md and report.pdf, built with lib 1.2.3, logo.png
     expect(proposeScope(doc('nothing host-shaped in here at all')).notes.join(' ')).toMatch(
       /no host-shaped text/i,
     );
+  });
+});
+
+describe('proposal to scope rules — do they match at the real gate?', () => {
+  /** Build real scope from a policy document, the way the UI does. */
+  const scopeFrom = (policy: string, pick?: string[]): ScopeConfig => {
+    const proposal = proposeScope([{ path: 'policy.md', content: policy }]);
+    const chosen = pick ?? proposal.include.map((c) => c.host);
+    const { include, exclude } = scopeRulesFromProposal(proposal, chosen, {
+      include: [],
+      exclude: [],
+    });
+    return {
+      include: include as unknown as ScopeRule[],
+      exclude: exclude as unknown as ScopeRule[],
+    };
+  };
+
+  const inScope = (scope: ScopeConfig, host: string): boolean =>
+    evaluateScope(scope, { scheme: 'https', host, port: 443, path: '/' }).inScope;
+
+  it('puts an exact host in scope and nothing else', () => {
+    const scope = scopeFrom('## In scope\napi.acme-corp.test\n');
+    expect(inScope(scope, 'api.acme-corp.test')).toBe(true);
+    expect(inScope(scope, 'www.acme-corp.test')).toBe(false);
+    expect(inScope(scope, 'evil.test')).toBe(false);
+  });
+
+  it('translates *.host so subdomains at ANY depth are in scope', () => {
+    const scope = scopeFrom('## In scope\n*.acme-corp.test\n');
+    // A literal `*.` rule matches exactly one label, so it would silently
+    // refuse deeper hosts and leave the operator believing they were in scope.
+    expect(inScope(scope, 'api.acme-corp.test')).toBe(true);
+    expect(inScope(scope, 'api.eu.acme-corp.test')).toBe(true);
+    expect(inScope(scope, 'a.b.c.acme-corp.test')).toBe(true);
+  });
+
+  it('does NOT widen a *.host rule to the apex the policy never listed', () => {
+    const scope = scopeFrom('## In scope\n*.acme-corp.test\n');
+    // Erring toward refusing costs a moment; erring toward permitting is an
+    // unauthorized request.
+    expect(inScope(scope, 'acme-corp.test')).toBe(false);
+    expect(inScope(scope, 'notacme-corp.test')).toBe(false);
+  });
+
+  it('applies out-of-scope hosts as exclusions that beat an include', () => {
+    const scope = scopeFrom(
+      '## In scope\n*.acme-corp.test\n\n## Out of scope\ninternal.acme-corp.test\n',
+    );
+    expect(inScope(scope, 'api.acme-corp.test')).toBe(true);
+    expect(inScope(scope, 'internal.acme-corp.test')).toBe(false);
+  });
+
+  it('adds exclusions even when the operator ticks nothing', () => {
+    const proposal = proposeScope([
+      { path: 'p.md', content: '## Out of scope\ninternal.acme-corp.test\n' },
+    ]);
+    const { include, exclude } = scopeRulesFromProposal(proposal, [], {
+      include: [],
+      exclude: [],
+    });
+    expect(include).toHaveLength(0);
+    // An exclusion the operator declines to add is one that silently stops applying.
+    expect(exclude.map((r) => r.host)).toEqual(['internal.acme-corp.test']);
+  });
+
+  it('only includes hosts that were actually ticked', () => {
+    const scope = scopeFrom('## In scope\napi.acme-corp.test\nwww.acme-corp.test\n', [
+      'api.acme-corp.test',
+    ]);
+    expect(inScope(scope, 'api.acme-corp.test')).toBe(true);
+    expect(inScope(scope, 'www.acme-corp.test')).toBe(false);
+  });
+
+  it('does not duplicate a host already in scope', () => {
+    const proposal = proposeScope([{ path: 'p.md', content: '## In scope\napi.acme-corp.test\n' }]);
+    const { include } = scopeRulesFromProposal(proposal, ['api.acme-corp.test'], {
+      include: [{ host: 'api.acme-corp.test' }],
+      exclude: [],
+    });
+    expect(include).toHaveLength(0);
+  });
+
+  it('gives every rule a distinct id', () => {
+    const scope = scopeFrom('## In scope\na.acme-corp.test\nb.acme-corp.test\nc.acme-corp.test\n');
+    const ids = scope.include.map((r) => r.id);
+    expect(ids.length).toBeGreaterThan(1);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('leaves any scheme and any port open, as a bare asset list implies', () => {
+    const scope = scopeFrom('## In scope\napi.acme-corp.test\n');
+    expect(
+      evaluateScope(scope, { scheme: 'http', host: 'api.acme-corp.test', port: 8080, path: '/' })
+        .inScope,
+    ).toBe(true);
   });
 });
