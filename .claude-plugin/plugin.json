@@ -1,8 +1,8 @@
 {
   "name": "tacnoc",
-  "displayName": "TACNOC \u2014 offline web-security analysis",
-  "version": "0.4.0",
-  "description": "TACNOC's offline analysis engine as callable tools: JWT decoding, session-token randomness screening, encode/decode/hash transforms, text/JSON/byte diffing, and fail-closed scope evaluation. Read-only \u2014 opens no project and generates no traffic.",
+  "displayName": "TACNOC — offline web-security analysis",
+  "version": "0.4.1",
+  "description": "TACNOC's offline analysis engine as callable tools: JWT decoding, session-token randomness screening, encode/decode/hash transforms, text/JSON/byte diffing, and fail-closed scope evaluation. Read-only — opens no project and generates no traffic.",
   "author": {
     "name": "GreyNOC (Brandon Soule)"
   },

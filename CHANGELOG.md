@@ -6,6 +6,10 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.4.1] — 2026-08-04
+
 ### Fixed — scope gate wiring
 
 - **A `*.host` line from a policy produced a rule that matched only ONE label.**

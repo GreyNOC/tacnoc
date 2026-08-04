@@ -109,9 +109,9 @@ npm run checksums      # write dist/SHA256SUMS-<os>.txt
 Packaging and the release runbook (SBOM, checksums, signing decision, CI) are in
 [RELEASE.md](RELEASE.md); changes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
-## What works today (v0.4.0)
+## What works today (v0.4.1)
 
-Implemented and covered by the automated suite (259 unit/integration tests plus
+Implemented and covered by the automated suite (295 unit/integration tests plus
 a real-Electron Playwright E2E suite: a smoke check, a full click-through, and a
 packaged-artifact verification). Run `npm test` for the current count.
 
