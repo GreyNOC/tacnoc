@@ -6,7 +6,32 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added — open a folder that existed before TACNOC did
+
+Operators do not start with an empty project. They start with a folder that
+already holds the work: the program policy, an ENGAGEMENT.md, last quarter's
+report, `recon/` full of subdomain dumps, a scratch `_notes.md`. Requiring a
+TACNOC project to exist before any of that could be used had it backwards.
+
+- **Open hunt folder** on the welcome screen adopts a folder as it stands. It
+  creates the project inside that folder, points the engagement folder at it,
+  reads what is there, and says which files carry the scope — no second step to
+  re-point the workspace at its own parent. Picking the folder IS the egress
+  decision, the button says so, and the adoption is written to the audit log
+  with what the folder exposed.
+- **Document scan.** A deterministic classifier sorts a folder into scope,
+  engagement, report, recon, notes, and other, and ranks it by relevance to
+  planning. Filename is a weak signal that decides READ ORDER; content decides
+  what a file IS, so scope written in a `README.md` is still found and a file of
+  200 hostnames is recon whatever it is called. A document that states what is
+  in or out of scope is classified as scope outright — that is the class whose
+  misfiling costs the most. Shown in Engagement, and available to the mesh.
+- **Nothing is authorized by being read.** The scan ranks and explains; it never
+  adds a rule. Scope still comes from the proposal card and the operator still
+  ticks each host.
+
+Measured on a real 342-file engagement folder: 120 read within the budget, every
+scope-bearing document in the top twelve, 255 recon files sorted away from them.
 
 ## [0.4.3] — 2026-08-04
 

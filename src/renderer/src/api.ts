@@ -25,6 +25,7 @@ import type { ExtensionManifest, Permission } from '@sdk/api.js';
 import type { TargetMap } from '@shared/target.js';
 import type { CaStatus, EngagementProfile, PreflightReport } from '@shared/engagement.js';
 import type { HuntRecallResult } from '@engine/analysis/huntMemory.js';
+import type { DocScanResult } from '@engine/engagement/docScan.js';
 import type { ScopeProposal } from '@engine/engagement/scopeProposal.js';
 import type {
   WorkspaceFile,
@@ -55,6 +56,14 @@ export const api = {
   createProject: (dir: string, name: string, authRef?: string) =>
     b().invoke<ProjectInfo>('createProject', dir, name, authRef),
   openProject: (dir: string) => b().invoke<ProjectInfo>('openProject', dir),
+  pickHuntFolder: () => b().invoke<string | null>('pickHuntFolder'),
+  adoptHuntFolder: (dir: string, name?: string, authRef?: string) =>
+    b().invoke<{
+      projectDirectory: string;
+      created: boolean;
+      scan: DocScanResult;
+      info: ProjectInfo;
+    }>('adoptHuntFolder', dir, name, authRef),
   closeProject: () => b().invoke<boolean>('closeProject'),
   getProjectInfo: () => b().invoke<ProjectInfo | undefined>('getProjectInfo'),
   exportProjectToFile: () => b().invoke<string | null>('exportProjectToFile'),
@@ -86,6 +95,7 @@ export const api = {
     b().invoke<HuntRecallResult>('recallHuntHistory', query, allPrograms),
   clearHuntMemory: () => b().invoke<void>('clearHuntMemory'),
   proposeScopeFromWorkspace: () => b().invoke<ScopeProposal>('proposeScopeFromWorkspace'),
+  scanEngagementDocs: () => b().invoke<DocScanResult>('scanEngagementDocs'),
 
   // scope + config
   getScope: () => b().invoke<ScopeConfig>('getScope'),

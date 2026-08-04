@@ -69,6 +69,8 @@ import {
   type ProposalSource,
   type ScopeProposal,
 } from './engagement/scopeProposal.js';
+import { buildDocScan, isReadableDoc, nameRank, type DocScanResult } from './engagement/docScan.js';
+
 import { caInstallInstructions } from './ca/installInstructions.js';
 import { listWorkspace, readWorkspaceFile, searchWorkspace } from './workspace/workspace.js';
 import { rankAttackSurface, type SurfaceRanking } from './analysis/surface.js';
@@ -79,6 +81,30 @@ import {
   type HuntOutcomeRecord,
   type HuntRecallResult,
 } from './analysis/huntMemory.js';
+
+/**
+ * Turn an operator-supplied project name into a directory name.
+ *
+ * The project directory is created inside a folder the operator picked, from
+ * text they typed, so it must not be able to climb out of that folder or produce
+ * a name the filesystem refuses.
+ */
+function sanitizeProjectName(name: string): string {
+  const RESERVED = new Set(['<', '>', ':', '"', '/', '?', '*', '|', String.fromCharCode(92)]);
+  let out = '';
+  for (const ch of name) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f) continue; // control characters
+    out += RESERVED.has(ch) ? '-' : ch;
+  }
+  // Windows silently drops a trailing dot or space, which would otherwise let
+  // "foo." and "foo" resolve to the same directory.
+  out = out
+    .replace(/[. ]+$/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return out.slice(0, 64) || 'Engagement';
+}
 
 const VIEW_MAX_BYTES = 4 * 1024 * 1024;
 const ENGAGEMENT_KEY = 'project.engagement';
@@ -1042,6 +1068,139 @@ export class TacnocSession extends EventEmitter {
    * line each came from. Proposals only — nothing is written to scope, because
    * a document is a claim about authorization, not authorization itself.
    */
+  /**
+   * Read the engagement folder and say which files matter to the hunt.
+   *
+   * A real hunt folder is mostly enumeration output. Reporting "342 documents"
+   * tells the operator nothing; six of those decide what may legitimately be
+   * touched and the rest are `amass` dumps. Filename order decides what gets
+   * READ (reading is bounded), and content decides what each file IS.
+   *
+   * Deterministic on purpose — the ranking feeds the scope decision, so it has
+   * to be reproducible and auditable. The model reads this; it does not produce
+   * it.
+   */
+  async scanEngagementDocs(options: { maxRead?: number } = {}): Promise<DocScanResult> {
+    const maxRead = Math.min(Math.max(Math.trunc(options.maxRead ?? 120), 1), 400);
+    const root = this.workspaceRoot();
+    const notes: string[] = [];
+    let listing;
+    try {
+      listing = await listWorkspace(root);
+    } catch (err) {
+      return buildDocScan(
+        root,
+        [],
+        [],
+        [
+          `The engagement folder could not be read: ${err instanceof Error ? err.message : String(err)}`,
+        ],
+      );
+    }
+
+    // Every file, not just the text ones. Filtering on `readable` here dropped
+    // binaries from the result entirely, so the totals described a smaller folder
+    // than the one on disk — and a silently shorter list reads as coverage.
+    const files = listing.entries.filter((e) => e.kind === 'file');
+    // Rank by filename first so the brief is never crowded out of the read
+    // budget by tool output that happened to sort earlier.
+    const ordered = files
+      .map((e) => ({
+        entry: e,
+        rank: nameRank(e.path).score,
+        readable: e.readable !== false && isReadableDoc(e.path),
+      }))
+      .sort((a, b) => Number(b.readable) - Number(a.readable) || b.rank - a.rank);
+
+    const read: { path: string; content: string; bytes: number }[] = [];
+    const listed: { path: string; bytes: number }[] = [];
+    for (const item of ordered) {
+      const bytes = item.entry.size ?? 0;
+      if (!item.readable || read.length >= maxRead) {
+        listed.push({ path: item.entry.path, bytes });
+        continue;
+      }
+      try {
+        const file = await this.readWorkspaceFile(item.entry.path);
+        read.push({ path: item.entry.path, content: file.content, bytes });
+      } catch {
+        // Binary, too large, or refused by the sandbox. Still report it as seen
+        // rather than dropping it — a silently shorter list reads as coverage.
+        listed.push({ path: item.entry.path, bytes });
+      }
+    }
+
+    if (listed.length) {
+      notes.push(
+        `${read.length} document(s) were read in full; ${listed.length} more were classified by ` +
+          'filename only (binary, oversized, or beyond the read budget).',
+      );
+    }
+    if (listing.truncated) {
+      notes.push('The folder is larger than the listing bound, so this is not every file in it.');
+    }
+    return buildDocScan(listing.root, read, listed, notes);
+  }
+
+  /**
+   * Open a hunt folder that predates TACNOC, creating the project inside it.
+   *
+   * The folder comes first in real work: the program policy, the brief, prior
+   * reports, and `recon/` all exist before anyone opens a proxy. Requiring a
+   * TACNOC project to exist before that material can be used had it backwards,
+   * and made adopting an in-flight engagement a manual chore of creating a
+   * project and then re-pointing the engagement folder at its own parent.
+   *
+   * Picking the folder IS the egress decision, and it is recorded as one: the
+   * workspace is set to exactly the folder the operator chose, and the audit log
+   * says so. Nothing is inferred and nothing is widened later.
+   */
+  async adoptHuntFolder(
+    dir: string,
+    options: { name?: string; authorizationRef?: string } = {},
+  ): Promise<{ projectDirectory: string; created: boolean; scan: DocScanResult }> {
+    let projectDirectory: string;
+    let created = false;
+    try {
+      projectDirectory = await resolveProjectDir(dir);
+      await this.openProject(projectDirectory);
+    } catch {
+      // No project here yet — this is the adopt case.
+      const name = (options.name ?? path.basename(dir)).trim() || 'Engagement';
+      projectDirectory = path.join(dir, `${sanitizeProjectName(name)}.tacnocproj`);
+      await this.createProject(
+        projectDirectory,
+        name,
+        options.authorizationRef?.trim() || undefined,
+      );
+      created = true;
+    }
+
+    // Point the engagement folder at what the operator actually picked. When the
+    // project is nested inside it, that is the folder holding the material; when
+    // they picked the project directory itself, this is a no-op.
+    const profile = this.getEngagementProfile();
+    if (dir !== projectDirectory && !profile.workspaceDir.trim()) {
+      await this.setEngagementProfile({ ...profile, workspaceDir: dir });
+    }
+
+    const scan = await this.scanEngagementDocs();
+    this.project?.audit.append({
+      ts: Date.now(),
+      actor: 'user',
+      action: created ? 'project.adopted-folder' : 'project.opened-folder',
+      detail: {
+        folder: dir,
+        projectDirectory,
+        engagementFolder: this.workspaceRoot(),
+        documentsSeen: scan.filesSeen,
+        documentsRead: scan.filesRead,
+        scopeDocuments: scan.byKind.scope,
+      },
+    });
+    return { projectDirectory, created, scan };
+  }
+
   async proposeScopeFromWorkspace(): Promise<ScopeProposal> {
     const listing = await this.listWorkspace();
     const readable = listing.entries.filter((e) => e.kind === 'file' && e.readable);

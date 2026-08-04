@@ -12,6 +12,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.js';
 import { scopeRulesFromProposal, type ScopeProposal } from '@engine/engagement/scopeProposal.js';
+import type { DocScanResult } from '@engine/engagement/docScan.js';
 import type { ScopeConfig, ScopeRule } from '@shared/scope.js';
 import {
   defaultEngagementProfile,
@@ -41,6 +42,7 @@ export function EngagementView(): JSX.Element {
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | undefined>(undefined);
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [scan, setScan] = useState<DocScanResult | undefined>(undefined);
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -56,6 +58,12 @@ export function EngagementView(): JSX.Element {
     try {
       const found = await api.proposeScopeFromWorkspace();
       setProposal(found);
+      // Same trigger as the proposal: both describe the folder in use, so they
+      // must never disagree about which folder that is.
+      api
+        .scanEngagementDocs()
+        .then(setScan)
+        .catch(() => setScan(undefined));
       // Pre-tick only the hosts the documents call in-scope; the operator still
       // confirms. Excluded and ambiguous hosts are never pre-selected.
       setPicked(new Set(found.include.map((c) => c.host)));
@@ -497,6 +505,45 @@ export function EngagementView(): JSX.Element {
             <p className="mono" style={{ fontSize: 12, opacity: 0.8 }}>
               {report.workspace.fileCount} document(s) · {report.workspace.notableFiles.join(', ')}
             </p>
+          ) : null}
+          {scan && scan.filesSeen > 0 ? (
+            <div style={{ marginTop: 12 }}>
+              <div className="row" style={{ gap: 10, flexWrap: 'wrap', fontSize: 12 }}>
+                {(['scope', 'engagement', 'report', 'recon', 'notes', 'other'] as const).map((k) =>
+                  scan.byKind[k] ? (
+                    <span key={k} className="chip">
+                      {scan.byKind[k]} {k}
+                    </span>
+                  ) : null,
+                )}
+              </div>
+              <p style={{ fontSize: 12, opacity: 0.7, margin: '8px 0 4px' }}>
+                Read {scan.filesRead} of {scan.filesSeen}, most relevant first. Classification is
+                deterministic and never authorizes anything — scope still comes from the card below,
+                and you still tick each host.
+              </p>
+              <table className="grid">
+                <tbody>
+                  {scan.docs.slice(0, 12).map((d) => (
+                    <tr key={d.path}>
+                      <td style={{ whiteSpace: 'nowrap', opacity: 0.85 }}>{d.kind}</td>
+                      <td>
+                        <span className="mono">{d.path}</span>
+                        <div style={{ fontSize: 11, opacity: 0.65 }}>
+                          {d.reasons.slice(0, 3).join(' · ')}
+                          {d.nameOnly ? ' · filename only (not read)' : ''}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {scan.notes.map((n) => (
+                <p key={n} style={{ fontSize: 11, opacity: 0.6, margin: '6px 0 0' }}>
+                  {n}
+                </p>
+              ))}
+            </div>
           ) : null}
           {report?.workspace.suggestedRoot ? (
             <div className="warn-box" style={{ marginTop: 10 }}>

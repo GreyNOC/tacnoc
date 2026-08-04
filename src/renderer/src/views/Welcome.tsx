@@ -9,6 +9,44 @@ export function Welcome(): JSX.Element {
   const [dir, setDir] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [adopted, setAdopted] = useState<string | null>(null);
+
+  /**
+   * Adopt a folder that already holds the engagement.
+   *
+   * The normal case in real work: the program policy, the brief, prior reports,
+   * and a `recon/` directory all exist before anyone opens a proxy. This creates
+   * the project inside that folder and points the engagement folder at it, so the
+   * material is usable immediately instead of after a manual re-pointing step.
+   *
+   * Picking the folder IS the egress decision, which is why the button says so.
+   */
+  const adopt = async (): Promise<void> => {
+    const d = await api.pickHuntFolder();
+    if (!d) return;
+    setBusy(true);
+    setError(null);
+    setAdopted(null);
+    try {
+      const res = await api.adoptHuntFolder(
+        d,
+        name.trim() || undefined,
+        authRef.trim() || undefined,
+      );
+      const k = res.scan.byKind;
+      setAdopted(
+        `${res.created ? 'Created a project in' : 'Opened the project in'} ${res.projectDirectory}. ` +
+          `Read ${res.scan.filesRead} of ${res.scan.filesSeen} document(s) — ` +
+          `${k.scope} scope, ${k.engagement} engagement, ${k.report} report, ${k.recon} recon. ` +
+          'Check Engagement → Proposed scope before testing anything.',
+      );
+      s.setProject(res.info);
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const pick = async (): Promise<void> => {
     const d = await api.pickDirectory();
@@ -99,6 +137,7 @@ export function Welcome(): JSX.Element {
         </div>
 
         {error && <div className="danger-box">{error}</div>}
+        {adopted && <div className="warn-box">{adopted}</div>}
 
         <div className="row" style={{ marginTop: 12 }}>
           <button className="primary" onClick={create} disabled={busy}>
@@ -111,6 +150,24 @@ export function Welcome(): JSX.Element {
             Import export…
           </button>
         </div>
+
+        <hr style={{ margin: '16px 0', border: 0, borderTop: '1px solid var(--border)' }} />
+
+        <h3 style={{ margin: '0 0 6px' }}>Already have a hunt folder?</h3>
+        <p className="hint" style={{ marginTop: 0 }}>
+          Point TACNOC at a folder that already holds the engagement — the program policy, the
+          brief, prior reports, <span className="mono">recon/</span> output, your notes. It creates
+          the project inside that folder, reads what is there, and tells you which files carry the
+          scope. Nothing is added to scope automatically; you still tick each host.
+        </p>
+        <p className="hint" style={{ marginTop: 0 }}>
+          <strong>Choosing the folder is the egress decision.</strong> Everything readable in it
+          becomes available to the AI and is sent to the model provider during a run — so pick a
+          folder you are willing to expose. Leave the mesh off and nothing leaves the machine.
+        </p>
+        <button onClick={adopt} disabled={busy}>
+          Open hunt folder…
+        </button>
       </div>
     </div>
   );

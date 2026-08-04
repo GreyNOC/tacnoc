@@ -68,6 +68,27 @@ const handlers: Record<string, Handler> = {
     return session.getProjectInfo();
   },
 
+  /**
+   * Open a folder that already holds an engagement, creating the project inside
+   * it if there is not one yet. This is how an in-flight hunt gets adopted:
+   * the operator points at the folder their material is already in.
+   */
+  async adoptHuntFolder(session, _w, [dir, name, authRef]) {
+    const result = await session.adoptHuntFolder(dir as string, {
+      ...(name ? { name: name as string } : {}),
+      ...(authRef ? { authorizationRef: authRef as string } : {}),
+    });
+    return { ...result, info: session.getProjectInfo() };
+  },
+
+  async pickHuntFolder(_s, win) {
+    const res = await dialog.showOpenDialog(win() ?? undefined!, {
+      properties: ['openDirectory'],
+      title: 'Choose the folder your engagement material is in',
+    });
+    return res.canceled ? null : res.filePaths[0];
+  },
+
   async closeProject(session) {
     await session.closeProject();
     return true;
@@ -223,6 +244,7 @@ const handlers: Record<string, Handler> = {
     s.recallHuntHistory((q as never) ?? {}, { allPrograms: Boolean(all) }),
   clearHuntMemory: (s) => s.clearHuntMemory(),
   proposeScopeFromWorkspace: (s) => s.proposeScopeFromWorkspace(),
+  scanEngagementDocs: (s) => s.scanEngagementDocs(),
 
   // ---- certificate lifecycle ----
   getCaStatus: (s) => s.getCaStatus(),
