@@ -6,6 +6,10 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.5.0] — 2026-08-04
+
 ### Added — open a folder that existed before TACNOC did
 
 Operators do not start with an empty project. They start with a folder that

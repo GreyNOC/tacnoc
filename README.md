@@ -109,11 +109,11 @@ npm run checksums      # write dist/SHA256SUMS-<os>.txt
 Packaging and the release runbook (SBOM, checksums, signing decision, CI) are in
 [RELEASE.md](RELEASE.md); changes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
-## What works today (v0.4.1)
+## What works today (v0.5.0)
 
-Implemented and covered by the automated suite (295 unit/integration tests plus
-a real-Electron Playwright E2E suite: a smoke check, a full click-through, and a
-packaged-artifact verification). Run `npm test` for the current count.
+Implemented and covered by the automated suite (325 unit/integration tests plus
+a real-Electron Playwright E2E suite: a smoke check, a full click-through, a
+packaged-artifact verification, and the hunt-folder adoption path). Run `npm test` for the current count.
 
 - HTTP/1.1 proxying; HTTPS interception via CONNECT + per-host leaf certs signed
   by the locally-generated project CA (verified with a real TLS handshake).
@@ -150,6 +150,13 @@ packaged-artifact verification). Run `npm test` for the current count.
   notes/tags, and suppression-rule management are all reachable from the UI.
 - Capability-based extension SDK; extensions run in an **isolated child process**
   with an RPC bridge (plus an inner `vm`), with a harmless example extension.
+- **Open a folder that already holds the engagement.** Point TACNOC at a hunt
+  folder as it stands — program policy, brief, prior reports, `recon/` output,
+  notes — and it creates the project inside it, reads what is there, and ranks
+  the documents by relevance (scope / engagement / report / recon / notes).
+  Classification is deterministic and content-driven: scope kept in a `README.md`
+  is still found, and a file of hostnames is recon whatever it is named. It ranks
+  and explains; it never adds a scope rule.
 - **Engagement layer** — a per-project engagement profile (program, handle,
   authorization reference, a program-mandated `User-Agent` and identity headers)
   that the Repeater and Variation engine actually enforce on generated traffic;
