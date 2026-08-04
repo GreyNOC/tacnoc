@@ -141,15 +141,36 @@ export function* iterate(plan: VariationPlan): Generator<Iteration> {
   }
 }
 
-/** Render the base raw request with an assignment substituted at each marker. */
+/**
+ * Render the base raw request with an assignment substituted at each marker.
+ *
+ * `maxBytes` bounds the rendered size: a payload value can itself contain
+ * another position's marker, which later substitutions then expand (a form of
+ * amplification that the pre-run worst-case estimate does not model). We project
+ * each step's size BEFORE allocating the joined string, so a plan cannot balloon
+ * the request to hundreds of MiB during rendering.
+ */
 export function renderRequest(
   raw: string,
   positions: VariationPosition[],
   assignment: string[],
+  maxBytes = Infinity,
 ): string {
   let out = raw;
+  let outBytes = Buffer.byteLength(raw);
   positions.forEach((p, i) => {
-    out = out.split(p.marker).join(assignment[i] ?? '');
+    const value = assignment[i] ?? '';
+    const pieces = out.split(p.marker);
+    // Project in BYTES, not UTF-16 code units: `maxBytes` is a byte budget, so a
+    // multibyte payload could otherwise pass a code-unit check yet render to
+    // several times the byte cap (each replaced marker grows by the byte delta).
+    const delta = Buffer.byteLength(value) - Buffer.byteLength(p.marker);
+    const projectedBytes = outBytes + (pieces.length - 1) * delta;
+    if (projectedBytes > maxBytes) {
+      throw new Error(`rendered request exceeded the ${maxBytes}-byte limit during expansion`);
+    }
+    out = pieces.join(value);
+    outBytes = projectedBytes;
   });
   return out;
 }

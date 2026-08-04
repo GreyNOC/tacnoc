@@ -1,12 +1,12 @@
 # Project format
 
-A GreyNOC Belcher project is a **directory** (conventionally `NAME.gnbproj/`)
+A TACNOC project is a **directory** (conventionally `NAME.tacnocproj/`)
 plus a **versioned portable export** for sharing/backup.
 
 ## On-disk project directory
 
 ```
-NAME.gnbproj/
+NAME.tacnocproj/
   belcher.db          SQLite database (WASM SQLite; metadata, history rows,
                       findings, suppressions, audit log, saved requests, jobs)
   blobs/              content-addressed body store  <aa>/<bb>/<sha256>

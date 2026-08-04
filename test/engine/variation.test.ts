@@ -43,7 +43,7 @@ function makeEngine(): VariationEngine {
 
 beforeAll(async () => {
   server = await startTestServer();
-  dir = path.join(os.tmpdir(), `belcher-var-${crypto.randomBytes(6).toString('hex')}`);
+  dir = path.join(os.tmpdir(), `tacnoc-var-${crypto.randomBytes(6).toString('hex')}`);
   blobs = new BlobStore(path.join(dir, 'blobs'));
 });
 
@@ -143,6 +143,7 @@ describe('variation engine — execution', () => {
       mode: 'batteringram',
       limits: LIMITS,
       responseMarkers: ['"ok":true'],
+      responseExtractors: [{ name: 'timestamp', pattern: '"ts":(\\d+)' }],
     };
     const { id, count } = engine.createJob(plan);
     expect(count).toBe(3);
@@ -155,6 +156,11 @@ describe('variation engine — execution', () => {
     );
     // response markers extracted
     expect(engine.getResults(id).every((r) => r.markerHits?.includes('"ok":true'))).toBe(true);
+    expect(engine.getResults(id).every((r) => r.extracted?.timestamp === '0')).toBe(true);
+    expect(engine.getResults(id).every((r) => r.responseHash?.length === 16)).toBe(true);
+    expect(engine.getResults(id).every((r) => r.responseWords === 1 && r.responseLines === 1)).toBe(
+      true,
+    );
     // audit lifecycle present
     const actions = audit.map((a) => a.action);
     expect(actions).toContain('job.create');
@@ -192,6 +198,154 @@ describe('variation engine — execution', () => {
     expect(progress.skipped).toBe(1);
     expect(progress.completed).toBe(1);
     expect(audit.some((a) => a.action === 'request.skipped-out-of-scope')).toBe(true);
+  });
+
+  it('validates engine limits, payload positions, and response regexes before creating a job', () => {
+    reset();
+    scope = inScopeHost();
+    const base: VariationPlan = {
+      name: 'validate',
+      base: { scheme: 'http', host: '127.0.0.1', port: server.httpPort, raw: raw('/json?x={{0}}') },
+      positions: [{ marker: '{{0}}', source: { kind: 'list', values: ['a'] } }],
+      mode: 'batteringram',
+      limits: LIMITS,
+    };
+    expect(() => engine.createJob({ ...base, limits: { ...LIMITS, maxConcurrency: 0 } })).toThrow(
+      /concurrency/i,
+    );
+    expect(() =>
+      engine.createJob({ ...base, positions: [{ ...base.positions[0]!, marker: '{{missing}}' }] }),
+    ).toThrow(/marker present/i);
+    expect(() => engine.createJob({ ...base, responseMarkers: ['(a+)+$'] })).toThrow(
+      /nested-quantifier/i,
+    );
+    // Nested-group shapes that bypassed the old flat guard must also be rejected.
+    for (const bad of ['((a)*)*$', '(([a-z])+)+$', '(\\d+)+$', '(a*)+$']) {
+      expect(() => engine.createJob({ ...base, responseMarkers: [bad] })).toThrow(
+        /nested-quantifier/i,
+      );
+    }
+    // Group-wrapping bypass: an unbounded quantifier INSIDE an extra
+    // (non-quantified) group must still be seen by an enclosing quantifier —
+    // e.g. ((a*))* is catastrophic yet slipped through the earlier scan.
+    for (const bad of ['((a*))*$', '((a+))+$', '(([a-z]+))+$', '(((\\d+)))+$']) {
+      expect(() => engine.createJob({ ...base, responseMarkers: [bad] })).toThrow(
+        /nested-quantifier/i,
+      );
+    }
+    // Doubly-nested groups WITHOUT an enclosing unbounded quantifier are linear
+    // and must NOT be over-rejected (guards against false positives from the fix).
+    for (const ok of ['((\\d+))', 'name="csrf" value="([^"]+)"', '((a+))?']) {
+      expect(() => engine.createJob({ ...base, responseMarkers: [ok] })).not.toThrow();
+    }
+    // A safe capturing regex with a single quantifier must still be accepted.
+    expect(() =>
+      engine.createJob({ ...base, responseExtractors: [{ name: 'id', pattern: '"id":(\\d+)' }] }),
+    ).not.toThrow();
+    expect(() =>
+      engine.createJob({
+        ...base,
+        responseExtractors: [
+          { name: 'same', pattern: 'a' },
+          { name: 'same', pattern: 'b' },
+        ],
+      }),
+    ).toThrow(/Duplicate response extractor/i);
+    expect(() =>
+      engine.createJob({
+        ...base,
+        base: {
+          ...base.base,
+          raw: `GET /?x=${'{{0}}'.repeat(40)} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n`,
+        },
+        positions: [{ marker: '{{0}}', source: { kind: 'list', values: ['A'.repeat(64 * 1024)] } }],
+      }),
+    ).toThrow(/rendered request exceeds/i);
+  });
+
+  it('caps oversized automated responses instead of buffering them without bound', async () => {
+    reset();
+    scope = inScopeHost();
+    const plan: VariationPlan = {
+      name: 'large-response',
+      base: {
+        scheme: 'http',
+        host: '127.0.0.1',
+        port: server.httpPort,
+        raw: raw('/large?size=12000000&x={{0}}'),
+      },
+      positions: [{ marker: '{{0}}', source: { kind: 'list', values: ['a'] } }],
+      mode: 'batteringram',
+      limits: LIMITS,
+    };
+    const { id } = engine.createJob(plan);
+    await engine.run(id);
+    const [result] = engine.getResults(id);
+    expect(result?.responseTruncated).toBe(true);
+    expect(result?.responseLength).toBe(10 * 1024 * 1024);
+    expect(captured[0]?.response?.body.truncated).toBe(true);
+  });
+
+  it('refuses to send a request that cross-marker expansion balloons past the size cap', async () => {
+    reset();
+    scope = inScopeHost();
+    // A validated ~64 KiB plan: position 0's value injects position 1's marker,
+    // which the second substitution then expands to ~256 MiB. The pre-run
+    // worst-case estimate is blind to this, so rendering must refuse and record
+    // an error rather than allocating and sending the amplified request.
+    const plan: VariationPlan = {
+      name: 'amplify',
+      base: {
+        scheme: 'http',
+        host: '127.0.0.1',
+        port: server.httpPort,
+        raw: `GET /json?a={{0}}&b={{1}} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n`,
+      },
+      positions: [
+        { marker: '{{0}}', source: { kind: 'list', values: ['{{1}}'.repeat(4000)] } },
+        { marker: '{{1}}', source: { kind: 'list', values: ['A'.repeat(64 * 1024)] } },
+      ],
+      mode: 'clusterbomb',
+      limits: LIMITS,
+    };
+    const { id, count } = engine.createJob(plan); // passes validation (blind estimate)
+    expect(count).toBe(1);
+    await engine.run(id);
+    const [result] = engine.getResults(id);
+    expect(result?.error).toMatch(/exceeded|expansion/i);
+    expect(engine.getResults(id).every((r) => r.requestId === '')).toBe(true);
+    expect(captured).toHaveLength(0); // nothing was actually sent
+  });
+
+  it('measures the render cap in BYTES, so a multibyte cross-marker expansion cannot exceed it', async () => {
+    reset();
+    scope = inScopeHost();
+    // Both payload values stay under the 64 KiB per-value cap: p0 injects 13k
+    // copies of {{1}} (65 KB of ASCII), and p1 is a 180-byte / 60-code-unit CJK
+    // value. At render, expanding the 13k markers yields ~2.3 MiB of BYTES
+    // (> the 2 MiB base cap) but only ~0.78M code units — a code-unit guard
+    // would have passed it and sent a 2.3 MiB request. The byte guard refuses it.
+    const plan: VariationPlan = {
+      name: 'amplify-multibyte',
+      base: {
+        scheme: 'http',
+        host: '127.0.0.1',
+        port: server.httpPort,
+        raw: `GET /json?a={{0}}&b={{1}} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n`,
+      },
+      positions: [
+        { marker: '{{0}}', source: { kind: 'list', values: ['{{1}}'.repeat(13_000)] } },
+        { marker: '{{1}}', source: { kind: 'list', values: ['中'.repeat(60)] } },
+      ],
+      mode: 'clusterbomb',
+      limits: LIMITS,
+    };
+    const { id, count } = engine.createJob(plan); // passes the byte-based pre-run estimate
+    expect(count).toBe(1);
+    await engine.run(id);
+    const [result] = engine.getResults(id);
+    expect(result?.error).toMatch(/exceeded|expansion/i);
+    expect(captured).toHaveLength(0);
   });
 
   it('enforces the request rate (token bucket)', async () => {

@@ -1,6 +1,6 @@
 # Threat model
 
-This document states what GreyNOC Belcher defends against, what it does not, and
+This document states what TACNOC defends against, what it does not, and
 the trust boundaries a reviewer should audit. It is a living document.
 
 ## Assets
@@ -30,7 +30,7 @@ the trust boundaries a reviewer should audit. It is a living document.
   and extension never share object references, so even a full escape cannot read
   the engine, session, secrets, or DB in the host process. Inside the child each
   extension is additionally evaluated in a `vm` with no `require`/`process`/
-  `module` in scope. Only the capability-scoped `belcher` API is offered; elevated
+  `module` in scope. Only the capability-scoped `tacnoc` API is offered; elevated
   permissions (`read-traffic`, `findings`) require explicit user approval.
   **Residual caveat:** the child process still has Node built-ins, so this is a
   strong process boundary, not a full OS sandbox (seccomp/AppContainer/
@@ -50,7 +50,8 @@ the trust boundaries a reviewer should audit. It is a living document.
 | Secret leakage into logs/exports/findings | Central `Redactor`; structured logs redact; findings evidence re-redacted; no network log sink |
 | Accidental credential disclosure in UI/exports | `detectSensitive` warns; body/headers masked until explicitly revealed |
 | Malformed traffic crashing the tool | Parser robustness + bounded buffers; tests for malformed input |
-| Data exfiltration by the tool itself | No telemetry/analytics/external-AI calls anywhere; local-only logging |
+| Data exfiltration by the tool itself | No telemetry, analytics, or update check; local-only logging with no network sink. **Exception: the opt-in AI mesh** — see the row below |
+| Captured traffic sent to a model provider by the AI mesh | Off by default; refuses to start without a per-project egress acknowledgement (audited); optional best-effort redaction of cookies/auth/secret patterns before send; engagement-folder reads gated by a second switch; hunt-memory recall scoped to the open engagement. **Residual risk: when enabled, captured content and engagement documents leave the machine — this is the operator's explicit choice, not a defended boundary.** |
 | Memory exhaustion from huge bodies | Configurable max body size; stream-to-disk; renderer view cap |
 | CA key disclosure | OS secure storage; file fallback clearly marked non-secure |
 | Captured content readable off-disk | Bodies + headers AES-256-GCM encrypted at rest under a per-project key in OS secure storage (GCM detects tampering); blob ids are keyed HMACs, not plaintext hashes, so there is no known-plaintext confirmation oracle |

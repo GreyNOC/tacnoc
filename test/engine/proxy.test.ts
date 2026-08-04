@@ -38,7 +38,7 @@ beforeAll(async () => {
   server = await startTestServer();
   projDir = path.join(
     os.tmpdir(),
-    `belcher-proxy-${crypto.randomBytes(6).toString('hex')}.gnbproj`,
+    `tacnoc-proxy-${crypto.randomBytes(6).toString('hex')}.tacnocproj`,
   );
   project = await ProjectStore.create(projDir, {
     name: 'proxy-test',

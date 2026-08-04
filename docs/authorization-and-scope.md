@@ -1,6 +1,6 @@
 # Authorization and scope
 
-GreyNOC Belcher is for **authorized** testing. Two mechanisms make that
+TACNOC is for **authorized** testing. Two mechanisms make that
 operational rather than aspirational: an authorization reference recorded on the
 project, and a fail-closed **scope** that gates all automated request
 generation.

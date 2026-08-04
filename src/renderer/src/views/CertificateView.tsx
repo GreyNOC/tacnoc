@@ -39,8 +39,8 @@ export function CertificateView(): JSX.Element {
             <strong>Warning — trusting this CA is powerful.</strong> Any host whose certificate is
             signed by this CA will be trusted by whatever you install it into. Install it{' '}
             <em>only</em> into the browser/profile you use for this authorized engagement, and
-            remove it when you are finished. GreyNOC Belcher never modifies your operating system
-            trust store for you.
+            remove it when you are finished. TACNOC never modifies your operating system trust store
+            for you.
           </div>
 
           <div className="warn-box">

@@ -1,17 +1,17 @@
 # Architecture
 
-GreyNOC Belcher is split into a **UI-independent engine** and an **Electron
+TACNOC is split into a **UI-independent engine** and an **Electron
 desktop shell**. The engine has no Electron dependency and is fully testable
 headlessly; the shell wires it to a React UI over a narrow IPC boundary.
 
 ```
 ┌──────────────────────────── Electron ────────────────────────────┐
 │  Renderer (React/TS, sandboxed, contextIsolation)                 │
-│    window.belcher.invoke(method, …args)   ── belcher:invoke ──►   │
-│    window.belcher.onEvent(cb)             ◄── belcher:event  ──    │
+│    window.tacnoc.invoke(method, …args)   ── tacnoc:invoke ──►   │
+│    window.tacnoc.onEvent(cb)             ◄── tacnoc:event  ──    │
 │                         │ preload (contextBridge, CJS)            │
 │  Main process           ▼                                          │
-│    ipc.ts  ──►  BelcherSession (engine facade)                     │
+│    ipc.ts  ──►  TacnocSession (engine facade)                     │
 │    ElectronSecretStore (safeStorage / DPAPI·Keychain·libsecret)    │
 └───────────────────────────────┬───────────────────────────────────┘
                                  │
@@ -22,14 +22,16 @@ headlessly; the shell wires it to a React UI over a narrow IPC boundary.
 │                BodyCollector, History/Meta/Findings/Audit repos    │
 │  scope/        evaluateScope (the safety gate)                     │
 │  scanner/      PassiveScanner + modular checks                     │
+│  target/       Bounded captured-traffic site-map aggregation       │
+│  analysis/     Token sequence/randomness screening                 │
 │  repeater/     Repeater, CookieJar, rawHttp                        │
-│  variation/    VariationEngine, payloads (safe-only)              │
+│  variation/    VariationEngine, payloads + response extraction     │
 │  transforms/   codec (encode/decode/hash/jwt)                     │
 │  compare/      text / JSON / byte diffs                            │
 │  redaction/    Redactor (+ detectSensitive)                       │
 │  net/ util/    sendRaw, TokenBucket, Semaphore                    │
 │  project/      ProjectStore (open/create/export/import)           │
-│  session.ts    BelcherSession — wires it all together             │
+│  session.ts    TacnocSession — wires it all together             │
 └──────────────────────────── sdk/ (extension host) ───────────────┘
                 shared/ — types used by engine, main, and renderer
 ```
@@ -58,7 +60,7 @@ client ⇄ ProxyServer ⇄ origin
               ▼
         BodyCollector ──► BlobStore (spill) / inline
               │
-        HttpExchange ──► BelcherSession.ingest():
+        HttpExchange ──► TacnocSession.ingest():
               ├─ history.insert()            (persist)
               ├─ emit 'exchange' (summary)   (live table)
               ├─ extHost.dispatchTraffic()   (sanitized to extensions)
@@ -75,8 +77,10 @@ forwards every byte to the peer.
 `CONNECT host:port` is answered with `200`, then the client socket is wrapped in
 a `tls.TLSSocket` presenting a per-host leaf certificate signed by the project
 CA. The decrypted stream is handed to an inner `http.Server`, so HTTP and
-decrypted HTTPS share one request path. ALPN offers only `http/1.1` (HTTP/2
-downgrade). See [docs/certificate-management.md](docs/certificate-management.md).
+decrypted HTTPS share one request path. ALPN offers `h2` and `http/1.1` by
+default: HTTP/2 is terminated and translated to HTTP/1.1 upstream (set
+`enableHttp2: false` to offer only `http/1.1`). HTTP/3/QUIC is not intercepted.
+See [docs/certificate-management.md](docs/certificate-management.md).
 
 ## Robustness posture
 

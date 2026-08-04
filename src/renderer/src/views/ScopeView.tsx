@@ -16,21 +16,37 @@ function newRule(): ScopeRule {
 
 export function ScopeView(): JSX.Element {
   const s = useStore();
+  const setToast = s.setToast;
   const [scope, setScope] = useState<ScopeConfig>({ include: [], exclude: [] });
   const [draft, setDraft] = useState<ScopeRule>(newRule());
   const [list, setList] = useState<'include' | 'exclude'>('include');
 
   useEffect(() => {
-    void api.getScope().then(setScope);
+    // Surface a load failure instead of silently rendering an empty scope — an
+    // empty list here is otherwise indistinguishable from "scope was reset".
+    void api
+      .getScope()
+      .then(setScope)
+      .catch((err) =>
+        setToast(`Could not load scope: ${err instanceof Error ? err.message : String(err)}`),
+      );
     // Re-sync if scope changes anywhere else (import, another surface, tests).
     return api.onEvent((e) => {
       if (e.type === 'scope-changed') setScope(e.payload);
     });
-  }, []);
+  }, [setToast]);
 
   const persist = async (next: ScopeConfig): Promise<void> => {
-    setScope(next);
-    await api.setScope(next);
+    const prev = scope;
+    setScope(next); // optimistic
+    try {
+      await api.setScope(next);
+    } catch (err) {
+      // The write failed — roll the UI back to what is actually persisted so a
+      // failed save can never masquerade as an accepted-then-reset rule.
+      setScope(prev);
+      setToast(`Could not save scope: ${err instanceof Error ? err.message : String(err)}`);
+    }
   };
 
   const addRule = async (): Promise<void> => {

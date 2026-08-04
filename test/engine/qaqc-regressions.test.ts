@@ -20,7 +20,7 @@ import { FindingsRepo } from '../../src/engine/storage/findingsRepo.js';
 import { PassiveScanner } from '../../src/engine/scanner/passiveScanner.js';
 import { BlobStore } from '../../src/engine/storage/blobStore.js';
 import { ProjectStore } from '../../src/engine/project/projectStore.js';
-import { BelcherSession } from '../../src/engine/session.js';
+import { TacnocSession } from '../../src/engine/session.js';
 import { CertificateAuthority } from '../../src/engine/ca/certificateAuthority.js';
 import { InMemorySecretStore, type SecretStore } from '../../src/engine/ca/secretStore.js';
 import type { Finding } from '../../src/shared/findings.js';
@@ -31,7 +31,7 @@ let dir: string;
 let blobs: BlobStore;
 
 beforeAll(async () => {
-  dir = path.join(os.tmpdir(), `belcher-qaqc-${crypto.randomBytes(6).toString('hex')}`);
+  dir = path.join(os.tmpdir(), `tacnoc-qaqc-${crypto.randomBytes(6).toString('hex')}`);
   blobs = new BlobStore(path.join(dir, 'blobs'));
 });
 
@@ -304,7 +304,7 @@ describe('scanner regressions', () => {
 // ---- project ws export/import (finding #9) ----
 describe('websocket export/import round-trip', () => {
   it('preserves captured WebSocket frames through export→import', async () => {
-    const s1 = await ProjectStore.create(path.join(dir, 'ws-a.gnbproj'), {
+    const s1 = await ProjectStore.create(path.join(dir, 'ws-a.tacnocproj'), {
       name: 'WS',
       secretStore: new InMemorySecretStore(),
     });
@@ -327,7 +327,7 @@ describe('websocket export/import round-trip', () => {
     s1.close();
     expect(exported.websockets).toHaveLength(1);
 
-    const s2 = await ProjectStore.import(exported, path.join(dir, 'ws-b.gnbproj'), {
+    const s2 = await ProjectStore.import(exported, path.join(dir, 'ws-b.tacnocproj'), {
       secretStore: new InMemorySecretStore(),
     });
     const restored = s2.wsMessages.listByExchange('ws-ex');
@@ -360,8 +360,8 @@ describe('secret store fail-closed', () => {
 // ---- session: proxy not wedged after a failed start (finding #5) ----
 describe('session proxy start resilience', () => {
   it('remains startable after a failed bind (EADDRINUSE)', async () => {
-    const sdir = path.join(dir, 'sess.gnbproj');
-    const session = new BelcherSession({ secretStoreFactory: () => new InMemorySecretStore() });
+    const sdir = path.join(dir, 'sess.tacnocproj');
+    const session = new TacnocSession({ secretStoreFactory: () => new InMemorySecretStore() });
     await session.createProject(sdir, 'sess');
 
     // Occupy a port so the first startProxy fails to bind.

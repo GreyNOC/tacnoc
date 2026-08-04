@@ -75,7 +75,11 @@ export function parseAuthority(
 /** Build an absolute URL from parts, keeping default ports implicit. */
 export function buildUrl(scheme: string, host: string, port: number, target: string): string {
   const defaultPort = scheme === 'https' ? 443 : 80;
-  const authority = port === defaultPort ? host : `${host}:${port}`;
+  // IPv6 literals must be bracketed to form a valid URL authority; parseAuthority
+  // stores them unbracketed, so re-bracket here (skip host names / IPv4 / already
+  // bracketed values, which never contain a bare ':').
+  const hostForUrl = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  const authority = port === defaultPort ? hostForUrl : `${hostForUrl}:${port}`;
   // target may already be absolute-form (plain HTTP proxy); normalize.
   if (/^https?:\/\//i.test(target)) return target;
   const path = target.startsWith('/') ? target : `/${target}`;

@@ -9,7 +9,7 @@ import { MessageViewer } from './MessageViewer.js';
 import { bytesHuman } from '../lib/format.js';
 
 const DEFAULT_RAW =
-  'GET / HTTP/1.1\r\nHost: example.test\r\nUser-Agent: GreyNOC-Belcher\r\nAccept: */*\r\n\r\n';
+  'GET / HTTP/1.1\r\nHost: example.test\r\nUser-Agent: TACNOC\r\nAccept: */*\r\n\r\n';
 
 export function RepeaterView(): JSX.Element {
   const s = useStore();

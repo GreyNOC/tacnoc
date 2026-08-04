@@ -13,6 +13,10 @@ import { CertificateView } from './views/CertificateView.js';
 import { ExtensionsView } from './views/ExtensionsView.js';
 import { AuditView } from './views/AuditView.js';
 import { SettingsView } from './views/SettingsView.js';
+import { TargetView } from './views/TargetView.js';
+import { SequencerView } from './views/SequencerView.js';
+import { AiMeshView } from './views/AiMeshView.js';
+import { EngagementView } from './views/EngagementView.js';
 import { api } from './api.js';
 
 function Logo(): JSX.Element {
@@ -32,6 +36,7 @@ const NAV: { group: string; items: { id: ViewId; label: string }[] }[] = [
   {
     group: 'Traffic',
     items: [
+      { id: 'target', label: 'Target Map' },
       { id: 'history', label: 'HTTP History' },
       { id: 'intercept', label: 'Intercept' },
     ],
@@ -41,9 +46,14 @@ const NAV: { group: string; items: { id: ViewId; label: string }[] }[] = [
     items: [
       { id: 'repeater', label: 'Repeater' },
       { id: 'variation', label: 'Variation' },
+      { id: 'sequencer', label: 'Sequencer' },
       { id: 'encoder', label: 'Encoder / Decoder' },
       { id: 'compare', label: 'Compare' },
     ],
+  },
+  {
+    group: 'AI',
+    items: [{ id: 'ai', label: 'AI Mesh' }],
   },
   {
     group: 'Analysis',
@@ -56,6 +66,7 @@ const NAV: { group: string; items: { id: ViewId; label: string }[] }[] = [
   {
     group: 'Project',
     items: [
+      { id: 'engagement', label: 'Engagement' },
       { id: 'certificate', label: 'CA Certificate' },
       { id: 'extensions', label: 'Extensions' },
       { id: 'settings', label: 'Settings' },
@@ -78,7 +89,7 @@ function TopBar(): JSX.Element {
     <div className="topbar">
       <div className="brand">
         <Logo />
-        <span>GreyNOC Belcher</span>
+        <span>TACNOC</span>
         <small>authorized testing</small>
       </div>
       {s.project && <span className="chip">{s.project.name}</span>}
@@ -151,6 +162,8 @@ function Sidebar(): JSX.Element {
 function ActiveView(): JSX.Element {
   const { view } = useStore();
   switch (view) {
+    case 'target':
+      return <TargetView />;
     case 'history':
       return <HistoryView />;
     case 'intercept':
@@ -163,10 +176,16 @@ function ActiveView(): JSX.Element {
       return <ScopeView />;
     case 'variation':
       return <VariationView />;
+    case 'sequencer':
+      return <SequencerView />;
+    case 'ai':
+      return <AiMeshView />;
     case 'encoder':
       return <EncoderView />;
     case 'compare':
       return <CompareView />;
+    case 'engagement':
+      return <EngagementView />;
     case 'certificate':
       return <CertificateView />;
     case 'extensions':

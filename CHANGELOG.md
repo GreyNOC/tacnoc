@@ -1,10 +1,246 @@
 # Changelog
 
-All notable changes to GreyNOC Belcher are documented here. The format follows
+All notable changes to TACNOC are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+_Nothing yet._
+
+## [0.4.0] — 2026-08-03
+
+### Added
+
+- **AI mesh — the first feature in TACNOC that sends data off the machine.**
+  A multi-agent layer (recon → planner → attacker → analyst → reporter) drives
+  the existing engine primitives to work an authorized engagement, using the
+  Anthropic API.
+
+  **Read this before enabling it:** when the mesh runs, **captured request and
+  response content — including any secrets, cookies, and PII it contains — and
+  the documents in the engagement folder are sent to the configured model
+  provider.** Everything else in TACNOC remains local.
+
+  It is bounded by the controls that already existed and some new ones: disabled
+  by default; refuses to start without a per-project **egress acknowledgement**
+  that is written to the audit log; optional best-effort redaction of cookies,
+  authorization headers, and secret patterns before send; the fail-closed scope
+  gate; the rate limiter; a per-run active-request budget; the audit log; and
+  emergency stop. Engagement-folder reads and certificate operations are each
+  behind their own switch, and certificate operations are off by default. The
+  provider API key is held app-wide in OS secure storage, is never sent to the
+  renderer, and is never written to logs, the audit trail, or hunt memory.
+
+  If your rules of engagement forbid third-party processing of captured data,
+  leave the mesh disabled. See
+  [docs/engagement-and-hunting.md](docs/engagement-and-hunting.md).
+- **Scope read out of the engagement folder.** Hitting "scope is fail-closed,
+  add hosts" while the program policy sits unread in the engagement folder is a
+  bad experience and an easy place to mistype a hostname. TACNOC now extracts
+  candidate hosts from those documents — in-scope, out-of-scope, and ambiguous —
+  each with the file and line it came from, and offers a checklist to add them.
+  It **proposes only**: a document is a claim about authorization, not
+  authorization, so nothing is written to scope without the operator ticking it.
+  Hosts the documents mark out-of-scope are never proposed as includes and are
+  added as exclusions instead, a host seen both ways resolves to excluded, and
+  the bounty platform's own domains are never proposed. The empty-scope preflight
+  blocker now names what it found instead of just saying the scope is empty.
+- **Engagement layer** — the mechanical parts of a bug-bounty engagement, made
+  enforceable. A per-project **engagement profile** records the program,
+  researcher handle, authorization reference, a required `User-Agent`, and any
+  identity headers the program mandates; when enforcement is on, the Repeater
+  and the Variation engine rewrite every request they generate to carry them,
+  preserving header order and collapsing duplicates. A `CR`/`LF` in a value is
+  refused rather than sanitized — that is header injection, not a typo. See
+  [docs/engagement-and-hunting.md](docs/engagement-and-hunting.md).
+- **Preflight readiness report** — one graded answer to "is this engagement
+  ready to test?", grounded in evidence rather than configuration: a missing
+  authorization reference, an empty scope, an expired CA, or a non-loopback
+  proxy bind are blockers; a CA the test browser has clearly never trusted
+  (traffic captured, zero decrypted HTTPS exchanges) is a warning.
+- **Engagement folder** — a sandboxed, read-only workspace the AI reads before
+  planning: program policy, scope documents, prior reports, notes. Path
+  traversal, absolute paths, and symlinks pointing out are refused; the
+  project's own database, blobs, and secret store are denied at every depth;
+  size, depth, and entry counts are bounded; binaries are refused rather than
+  returned as mojibake.
+- **Certificate lifecycle** — the project CA can be issued (rotated) and revoked
+  from the app, both audited with a reason and a persisted history. Revoking
+  turns TLS interception off: `CONNECT` becomes an unread pass-through tunnel
+  until a new CA is issued. The proxy picks up either change on the next
+  `CONNECT`, without a restart. No OS trust store is ever touched.
+- **Proof-of-exploit gate** — `prove_finding` takes a control and a test
+  exchange and the *engine* grades the differential from the captured bytes:
+  `confirmed`, `refuted`, or `inconclusive`. The mesh cannot mark its own work
+  proven, and a second changed variable, a `429`, or a `5xx` is raised as a
+  caveat rather than quietly confirmed.
+- **Hunt memory** — local, app-global, append-only outcomes keyed by *path
+  shape* (`/api/orders/{id}`), so what one engagement settled is available to
+  the next and to targets with the same route shape. Advisory only: it reorders
+  attention, and can never confirm a finding or place a host in scope. Notes are
+  secret-redacted on write.
+- **Attack-surface ranking** — deterministic, offline scoring of in-scope
+  endpoints by the defect class each most likely hides (identifiers and
+  state-changing methods → access control, URL-shaped parameters → SSRF, and so
+  on), with reasons. Adapted from GreyIQ's BugHunter hunt brain; it only
+  reorders work and never adds a target or a finding.
+- **Recon role in the AI mesh**, running before the planner and reviewing the
+  engagement folder, the program's rules, scope, certificate state, the ranked
+  surface, and prior-hunt history. A preflight blocker stops the run there
+  instead of producing a plan for an engagement that cannot proceed.
+
+### Packaging
+
+- **`npm run dist:linux`** (`scripts/package-linux.mjs`) produces
+  `TACNOC-<version>-linux-x64.tar.gz` — extract and run `./tacnoc`. It builds
+  from any host, including Windows.
+- Documented which Linux target is buildable where: `tar.gz` cross-builds from
+  Windows, **AppImage does not** (packaging it creates symlinks Windows refuses
+  without elevation, so the build fails with `EPERM`). Build AppImage on Linux
+  or via the CI matrix. See [RELEASE.md](RELEASE.md).
+- Linux artifacts now use the same `${productName}-${version}-…` naming as the
+  Windows ones.
+
+### Changed
+
+- The mesh's role prompts now encode a working methodology — hypothesis-driven
+  testing, control-versus-test differentials, the defect classes that actually
+  pay, and explicit evidence discipline — rather than guardrails alone.
+- Mesh roles default to `claude-opus-5` with per-role reasoning effort (`xhigh`
+  for the planner and attacker), and the per-turn output ceiling scales with
+  effort so a deep turn is not truncated mid-answer.
+- **A declined model turn is now reported, never swallowed.** A refusal returns
+  a successful response with empty content, which previously read as "nothing to
+  say"; the run now records it as an error, tells the reporter which roles were
+  not done, and the report says the engagement was incomplete.
+- Stored AI settings are normalized on read, so a project written by an earlier
+  version loads without a missing role crashing the run.
+- Renamed the application from **GreyNOC Belcher** to **TACNOC** (package,
+  window/product name, engine facade, IPC channels, and docs). On-disk project
+  format identifiers — the `belcher.db` filename, the `greynoc-belcher-project`
+  export-format tag, and the secret-store/blob-id key-derivation salts — are
+  left unchanged so existing projects and exports keep working unmodified.
+  Historical entries below that name specific released artifacts (v0.1.0,
+  v0.2.0) are left as-is; those files were actually shipped under the old name.
+
+## [0.3.0] — 2026-07-18
+
+### Added
+
+- Captured-traffic **Target Map** with normalized endpoint grouping, current
+  scope evaluation, request observations, inspector, and Repeater handoff.
+- **Sequencer** workbench for decoded-byte token randomness screening across
+  text, hex, Base64, and Base64url samples.
+- Variation response triage: word/line counts, short SHA-256 fingerprints,
+  grep-style markers, and named regex extraction columns.
+- An explicit intercepting-proxy capability matrix and prioritized gap list.
+
+### Security / robustness
+
+- Variation plans now validate engine limits, marker presence/uniqueness,
+  payload sizes, and response-regex bounds before any network request.
+- Automated sends now have a hard wall-clock deadline and a 10 MiB response
+  capture ceiling; oversized responses — and a deadline that fires mid-stream —
+  are marked truncated with the partial body preserved, instead of being
+  buffered without bound or discarded.
+- Response analysis is limited to a 256 KiB prefix.
+- Upgraded Electron, electron-builder, electron-vite, Vite, and Vitest to
+  maintained lines that clear the current npm audit advisories; the development
+  Node.js floor is now 22.12.
+- Dependency auditing now covers the full tree (Electron is a shipping
+  `devDependency`), release CI enforces it, and the concise SBOM explicitly
+  includes Electron as a required packaged runtime.
+
+### Packaging
+
+- Windows now builds a **portable** single-file `.exe` (runs without installing)
+  alongside the NSIS **installer**; the two are given distinct artifact names
+  (`…-Portable-x64.exe` / `…-Setup-x64.exe`) so they no longer collide, replacing
+  the previous Windows `.zip` archive.
+- New `npm run dist:win` (`scripts/package-windows.mjs`): deletes previous
+  releases from `dist/`, rebuilds, produces both Windows artifacts, and writes
+  the SHA-256 manifest. Builds remain UNSIGNED unless signing secrets are set.
+
+### QA/QC pass — adversarial audit fixes
+
+A multi-agent adversarial review of the new Target Map, Sequencer, and variation
+work, each fix pinned with a regression test (the suite grew from 138 to 155).
+
+- **Sequencer severity was inverted for a strong bit-bias.** The assessment was
+  derived by matching *formatted* warning strings, so a monobit p-value small
+  enough to render in exponential notation (the strongest bias) was rated the
+  milder "weak". Severity is now computed from the numeric metrics directly, and
+  the adjacent-byte correlation signal can escalate to "poor".
+- **Variation response-regex guard was bypassable.** The catastrophic-backtracking
+  guard only caught flat `(a+)+` shapes; nested groups such as `((a)*)*` and
+  `([a-z]+)+` slipped through and, since analysis runs on the engine's event loop,
+  could freeze a job and defeat pause/stop. Replaced with a structural
+  nested-quantifier detector (still: keep response regexes simple).
+- **Variation request amplification.** A payload value that contains another
+  position's marker could expand a validated ~84 KiB plan into a hundreds-of-MiB
+  request at render time. Rendering now projects and bounds each substitution,
+  refusing (and recording) an over-cap expansion before anything is sent; render
+  failures are counted instead of silently dropped.
+- **Target Map "latest exchange" pointed at the oldest same-millisecond capture**
+  (an inverted tie-break), so the inspector and Repeater handoff could replay a
+  stale request. Fixed to keep the newest.
+- **Target Map IPv6 and host-case handling.** Unbracketed IPv6 authorities
+  produced an invalid stored URL that collapsed the map (path and parameters
+  lost); URLs are now bracketed, the metadata parser recovers path/parameters
+  from otherwise-unparseable targets, mixed-case hosts group into a single origin,
+  and empty query-parameter names are dropped.
+- **Sequencer input handling.** Base64 and Base64url now validate identically
+  (interior whitespace and the `% 4` length rule); whitespace-only sample lines no
+  longer abort a run; large sample sets fold min/max without a spread that could
+  overflow the call stack; and an unsupported encoding fails with a clear message.
+- **IPC allowlist parity** is asserted at startup (a missing or extra handler
+  fails loudly) rather than only documented, and the Target view now surfaces
+  load errors.
+- Corrected stale documentation that claimed the MITM offers only HTTP/1.1; it
+  negotiates ALPN `h2` and intercepts HTTP/2 by default.
+
+### QA/QC pass — second adversarial review
+
+A second multi-agent adversarial review of the v0.3.0 diff (Target Map,
+Sequencer, variation triage, and the `sendRaw` response bounds). Each surviving
+finding was reproduced, fixed, and pinned with a regression test (the suite grew
+from 155 to 159; two further reported findings were verified as non-issues and
+dropped).
+
+- **`sendRaw` could crash the main process on an already-aborted signal.** When
+  the abort signal was already set, the request was destroyed before its `error`
+  listener was attached, so Node re-emitted `error` with no handler — an
+  uncaughtException that terminates the Electron main process. Reachable by
+  pressing Stop while a variation task waits on a saturated concurrency
+  semaphore. The request-level handlers are now attached before any path that
+  can destroy the request.
+- **The response-regex ReDoS guard was bypassable by group-wrapping.**
+  `hasNestedQuantifier` discarded a nested group's inner-quantifier flag when the
+  group had no immediate quantifier, so `((a*))*` (and `((a+))+`, `(([a-z]+))+`,
+  …) passed validation and could freeze the engine event loop in
+  `analyzeResponse`, defeating pause/stop. The scan now propagates an inner
+  unbounded quantifier to the enclosing group.
+- **The render size cap was measured in UTF-16 code units, not bytes.** A
+  multibyte cross-marker expansion could render a request several times the 2 MiB
+  base cap while passing the guard. The projection is now byte-accurate, honoring
+  the documented bound.
+- **The Target Map evaluated scope without the query string.** Endpoint scope
+  used the bare pathname while the live gate uses path+query, so a query-sensitive
+  include/exclude rule classified endpoints differently in the map than at the
+  gate (display-only — every live automated path recomputes scope with the query
+  intact, so there was no gate bypass). The map now evaluates scope with the same
+  origin-form path (query included) the gate uses.
+- **A trailing-dot FQDN split one origin into two sites** in the map. Host
+  grouping only lowercased; the scope engine also strips trailing dots. Grouping
+  now reuses the scope engine's `normalizeHost` (lowercase + strip trailing dots).
+- **The Target view's endpoint-detail load had no error handling** — a rejected
+  fetch became an unhandled rejection and left the inspector silently stale; it
+  now surfaces the error the same way the map load does.
+- Corrected stale docs that still described the pre-upgrade Electron 33 / Node
+  20.18 runtime (the app now ships Electron 43 on the Node 22.x line):
+  `docs/testing.md`, `docs/PLAN.md`, ADR 0003 (dated update note), ADR 0004; and
+  the README "What works today" heading no longer reads "(first delivery)".
 
 ## [0.2.0] — 2026-07-17
 
@@ -157,6 +393,7 @@ web-application security research.
   seccomp / AppContainer / `sandbox-exec`).
 - At-rest encryption covers content, not searchable metadata.
 
-[Unreleased]: https://example.invalid/greynoc/belcher/compare/v0.2.0...HEAD
-[0.2.0]: https://example.invalid/greynoc/belcher/compare/v0.1.0...v0.2.0
-[0.1.0]: https://example.invalid/greynoc/belcher/releases/tag/v0.1.0
+[Unreleased]: https://example.invalid/greynoc/tacnoc/compare/v0.3.0...HEAD
+[0.3.0]: https://example.invalid/greynoc/tacnoc/compare/v0.2.0...v0.3.0
+[0.2.0]: https://example.invalid/greynoc/tacnoc/compare/v0.1.0...v0.2.0
+[0.1.0]: https://example.invalid/greynoc/tacnoc/releases/tag/v0.1.0

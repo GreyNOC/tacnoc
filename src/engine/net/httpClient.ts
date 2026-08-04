@@ -20,6 +20,7 @@ export interface RawSendResult {
   httpVersion: string;
   headers: HttpHeader[];
   body: Buffer;
+  bodyTruncated: boolean;
   ttfbMs: number;
   durationMs: number;
   tlsAuthorized?: boolean;
@@ -35,6 +36,7 @@ export function sendRaw(
   body: Buffer,
   timeoutMs: number,
   signal?: AbortSignal,
+  maxResponseBytes = 10 * 1024 * 1024,
 ): Promise<RawSendResult> {
   const started = Date.now();
   const options: http.RequestOptions = {
@@ -66,39 +68,92 @@ export function sendRaw(
       });
     }
 
+    let settled = false;
+    // Wall-clock deadline. Before the response starts, this fails the request;
+    // once bytes are streaming it keeps the partial body and marks it truncated
+    // (consistent with the response size cap) instead of discarding the capture.
+    let onDeadline = (): void => {
+      req.destroy(new Error('request deadline exceeded'));
+    };
+    const hardTimer = setTimeout(() => onDeadline(), timeoutMs);
+    const cleanup = (): void => {
+      clearTimeout(hardTimer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const fail = (err: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
     const onAbort = (): void => {
       req.destroy(new AbortError());
     };
+
+    // Attach the request-level handlers BEFORE any code path that can destroy
+    // the request. req.destroy(err) emits an 'error' event; if no 'error'
+    // listener is attached yet — e.g. the already-aborted branch below, or a
+    // synchronous connect failure — Node turns it into an uncaughtException,
+    // which (there being no process-level handler) crashes the Electron main
+    // process rather than rejecting this promise.
+    req.on('timeout', () => req.destroy(new Error('request timeout')));
+    req.on('error', fail);
+
     if (signal) {
       if (signal.aborted) {
         req.destroy(new AbortError());
-        return reject(new AbortError());
+        return fail(new AbortError());
       }
       signal.addEventListener('abort', onAbort, { once: true });
     }
 
-    req.on('timeout', () => req.destroy(new Error('request timeout')));
-    req.on('error', (err) => {
-      signal?.removeEventListener('abort', onAbort);
-      reject(err);
-    });
     req.on('response', (res) => {
       const ttfbMs = Date.now() - started;
       const chunks: Buffer[] = [];
-      res.on('data', (c) => chunks.push(c as Buffer));
-      res.on('end', () => {
-        signal?.removeEventListener('abort', onAbort);
+      let capturedBytes = 0;
+      let bodyTruncated = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
         resolve({
           statusCode: res.statusCode ?? 0,
           statusMessage: res.statusMessage ?? '',
           httpVersion: `HTTP/${res.httpVersion}`,
           headers: fromRawHeaders(res.rawHeaders),
-          body: Buffer.concat(chunks),
+          body: Buffer.concat(chunks, capturedBytes),
+          bodyTruncated,
           ttfbMs,
           durationMs: Date.now() - started,
           ...(tlsAuthorized !== undefined ? { tlsAuthorized } : {}),
         });
+      };
+      // Once the response is streaming, the deadline keeps the partial capture.
+      onDeadline = (): void => {
+        if (settled) return;
+        bodyTruncated = true;
+        finish();
+        res.destroy();
+      };
+      res.on('data', (value) => {
+        const chunk = value as Buffer;
+        const remaining = maxResponseBytes - capturedBytes;
+        if (remaining > 0) {
+          const kept = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+          chunks.push(kept);
+          capturedBytes += kept.length;
+        }
+        if (chunk.length > remaining) {
+          bodyTruncated = true;
+          finish();
+          res.destroy();
+        }
       });
+      res.on('end', finish);
+      res.on('aborted', () => {
+        if (!bodyTruncated) fail(new Error('response aborted before completion'));
+      });
+      res.on('error', fail);
     });
 
     if (body.length) req.write(body);

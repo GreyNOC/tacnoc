@@ -4,6 +4,7 @@ node_modules/
 .pnp.js
 
 # Build output
+release/
 out/
 dist/
 dist-electron/
@@ -20,7 +21,7 @@ test-results/
 .vitest/
 
 # Local project data & secrets (never commit captured traffic or CA keys)
-*.gnbproj
+*.tacnocproj
 projects/
 *.pem
 *.key

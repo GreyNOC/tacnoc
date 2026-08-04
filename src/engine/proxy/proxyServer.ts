@@ -7,9 +7,10 @@
  *   - CONNECT terminates TLS locally with a per-host leaf cert (from the project
  *     CA) and feeds the decrypted stream into an inner `http.Server`, so the
  *     same request path handles both HTTP and decrypted HTTPS.
- *   - ALPN on the MITM side offers only `http/1.1`, so h2-capable clients
- *     downgrade to HTTP/1.1 (we do not parse HTTP/2 — see
- *     docs/certificate-management.md and PLAN.md).
+ *   - ALPN on the MITM side offers `h2` and `http/1.1` by default: HTTP/2 is
+ *     terminated and translated to HTTP/1.1 upstream (set `enableHttp2: false`
+ *     to offer only `http/1.1`). HTTP/3/QUIC is not intercepted — see
+ *     docs/certificate-management.md and PLAN.md.
  *
  * All captured bytes are treated as untrusted: bodies flow through bounded
  * BodyCollectors, header fidelity is preserved, and response content is never
@@ -92,7 +93,7 @@ interface RequestContext {
   inScope: boolean;
 }
 
-const AUTHORITY = Symbol('belcherAuthority');
+const AUTHORITY = Symbol('tacnocAuthority');
 
 export class ProxyServer {
   private server?: http.Server;
@@ -101,6 +102,12 @@ export class ProxyServer {
   private readonly log: Logger;
   private boundHost = '';
   private boundPort = 0;
+  /** CA generation the current `mitm` server was built for. */
+  private mitmGeneration = -1;
+  /** CONNECTs passed through unread because the CA was revoked. */
+  private passthroughCount = 0;
+  /** Sockets currently handed to the TLS-terminating server, so a CA change can drop them. */
+  private readonly intercepted = new Set<net.Socket>();
 
   constructor(private readonly deps: ProxyServerDeps) {
     this.log = (deps.logger ?? rootLogger).child('proxy');
@@ -114,14 +121,21 @@ export class ProxyServer {
     return this.server && this.boundPort ? { host: this.boundHost, port: this.boundPort } : null;
   }
 
-  async start(host: string, port: number): Promise<{ host: string; port: number }> {
-    // Secure MITM server: terminates TLS with per-host leaf certs (SNI), offers
-    // ALPN h2+http/1.1 (or just http/1.1 when h2 is disabled), and delivers BOTH
-    // HTTP/2 and HTTP/1.1 through the http1-compatible 'request' event, so a
-    // single request path handles both (HTTP/2 is translated to HTTP/1.1 to the
-    // origin). WebSocket upgrades arrive via 'upgrade' (http/1.1 only).
+  /** How many HTTPS tunnels were relayed without interception (revoked CA). */
+  get passthroughTunnels(): number {
+    return this.passthroughCount;
+  }
+
+  /**
+   * Build the secure MITM server: terminates TLS with per-host leaf certs (SNI),
+   * offers ALPN h2+http/1.1 (or just http/1.1 when h2 is disabled), and delivers
+   * BOTH HTTP/2 and HTTP/1.1 through the http1-compatible 'request' event, so a
+   * single request path handles both (HTTP/2 is translated to HTTP/1.1 to the
+   * origin). WebSocket upgrades arrive via 'upgrade' (http/1.1 only).
+   */
+  private buildMitm(): http2.Http2SecureServer {
     const defaultLeaf = this.deps.ca.leafPemFor('localhost');
-    this.mitm = http2.createSecureServer({
+    const mitm = http2.createSecureServer({
       key: defaultLeaf.key,
       cert: defaultLeaf.cert,
       allowHTTP1: true,
@@ -134,7 +148,7 @@ export class ProxyServer {
         }
       },
     });
-    this.mitm.on(
+    mitm.on(
       'request',
       (req, res) =>
         void this.onRequest(
@@ -143,15 +157,79 @@ export class ProxyServer {
           'https',
         ),
     );
-    this.mitm.on('upgrade', (req, sock, head) =>
+    mitm.on('upgrade', (req, sock, head) =>
       this.onUpgrade(req as unknown as http.IncomingMessage, sock as net.Socket, head, 'https'),
     );
-    this.mitm.on('sessionError', (err) => this.log.debug('h2 session error', { err: String(err) }));
-    this.mitm.on('tlsClientError', () => {
+    mitm.on('sessionError', (err) => this.log.debug('h2 session error', { err: String(err) }));
+    mitm.on('tlsClientError', () => {
       /* client TLS errors (e.g. untrusted CA) are expected; ignore */
     });
-    this.mitm.on('clientError', (_e, sock) => (sock as net.Socket).destroy());
+    mitm.on('clientError', (_e, sock) => (sock as net.Socket).destroy());
+    return mitm;
+  }
 
+  /**
+   * The TLS-terminating server, built on first CONNECT and rebuilt whenever the
+   * CA changes generation (a rotate invalidates every leaf it signed). Returns
+   * undefined while the CA is revoked, which is the signal to tunnel a CONNECT
+   * through unread instead of intercepting it.
+   */
+  private ensureMitm(): http2.Http2SecureServer | undefined {
+    if (!this.deps.ca.active) {
+      this.dropInterceptedSockets();
+      return undefined;
+    }
+    if (this.mitm && this.mitmGeneration === this.deps.ca.generation) return this.mitm;
+    try {
+      const built = this.buildMitm();
+      // Connections terminated with the retired CA cannot be validated by a
+      // client that now trusts the new one, so they are dropped rather than
+      // left serving a second chain. `closeAllConnections()` does not exist on
+      // Http2SecureServer (it is an http.Server method), and sockets handed in
+      // via `emit('connection')` are not counted by `close()` either — so the
+      // sockets have to be tracked and destroyed explicitly.
+      this.dropInterceptedSockets();
+      this.mitm?.close();
+      this.mitm = built;
+      this.mitmGeneration = this.deps.ca.generation;
+    } catch (err) {
+      this.log.error('failed to build TLS interception server', { err: String(err) });
+      return undefined;
+    }
+    return this.mitm;
+  }
+
+  /**
+   * Destroy every socket currently being intercepted.
+   *
+   * Called when the CA changes. Without it, revoking only affected NEW tunnels:
+   * a browser holds an HTTPS tunnel open for minutes, so plaintext kept being
+   * decrypted and written to history while the status said interception was off
+   * — the status and the behaviour disagreeing is worse than either state.
+   */
+  private dropInterceptedSockets(): void {
+    for (const socket of this.intercepted) socket.destroy();
+    this.intercepted.clear();
+  }
+
+  /**
+   * React to a CA rotate or revoke without waiting for the next CONNECT. The
+   * session calls this so the change takes effect on connections already open.
+   */
+  refreshCa(): void {
+    if (!this.server) return;
+    this.dropInterceptedSockets();
+    if (!this.deps.ca.active) {
+      this.mitm?.close();
+      this.mitm = undefined;
+      this.mitmGeneration = -1;
+      this.log.warn('TLS interception stopped: the project CA was revoked');
+      return;
+    }
+    if (this.mitmGeneration !== this.deps.ca.generation) this.ensureMitm();
+  }
+
+  async start(host: string, port: number): Promise<{ host: string; port: number }> {
     this.server = http.createServer();
     this.server.on('request', (req, res) => void this.onRequest(req, res, 'http'));
     this.server.on('connect', (req, sock, head) => this.onConnect(req, sock as net.Socket, head));
@@ -184,11 +262,13 @@ export class ProxyServer {
     // Force-terminate keep-alive/tunnel sockets so close() resolves promptly.
     this.server?.closeAllConnections?.();
     (this.mitm as unknown as { closeAllConnections?: () => void })?.closeAllConnections?.();
+    this.dropInterceptedSockets();
     for (const sock of this.connections) sock.destroy();
     this.connections.clear();
     await Promise.all([closeServer(this.server), closeServer(this.mitm)]);
     this.server = undefined;
     this.mitm = undefined;
+    this.mitmGeneration = -1;
     this.boundPort = 0;
     this.log.info('proxy stopped');
   }
@@ -208,20 +288,57 @@ export class ProxyServer {
   private onConnect(req: http.IncomingMessage, clientSocket: net.Socket, head: Buffer): void {
     const { host, port } = parseAuthority(req.url ?? '', 443);
     clientSocket.on('error', () => clientSocket.destroy());
+    const mitm = this.ensureMitm();
+    if (!mitm) {
+      // The CA is revoked, so we cannot present a certificate for this host.
+      // Relay the bytes untouched instead of failing the connection: the client
+      // still reaches the origin (over TLS we never see), and the operator gets
+      // a truthful "not intercepted" state to test against.
+      this.passthrough(host, port, clientSocket, head);
+      return;
+    }
     try {
-      clientSocket.write(
-        'HTTP/1.1 200 Connection Established\r\nProxy-agent: GreyNOC-Belcher\r\n\r\n',
-      );
+      clientSocket.write('HTTP/1.1 200 Connection Established\r\nProxy-agent: TACNOC\r\n\r\n');
       if (head && head.length) clientSocket.unshift(head);
       // Stash the CONNECT authority on the raw socket; the secure MITM server
       // terminates TLS, negotiates ALPN (h2/http1) and delivers requests via the
       // compatibility 'request' event (h2 requests included) — see start().
       (clientSocket as unknown as Record<symbol, unknown>)[AUTHORITY] = { host, port };
-      this.mitm!.emit('connection', clientSocket);
+      this.intercepted.add(clientSocket);
+      clientSocket.on('close', () => this.intercepted.delete(clientSocket));
+      mitm.emit('connection', clientSocket);
     } catch (err) {
       this.log.warn('CONNECT setup failed', { host, err: String(err) });
       clientSocket.destroy();
     }
+  }
+
+  /** Blind TCP relay for a CONNECT we are not intercepting. Captures nothing. */
+  private passthrough(host: string, port: number, clientSocket: net.Socket, head: Buffer): void {
+    if (!host) {
+      clientSocket.destroy();
+      return;
+    }
+    this.passthroughCount += 1;
+    this.log.info('CONNECT tunneled without interception (CA revoked)', { host, port });
+    const upstream = net.connect(port, host);
+    const teardown = (): void => {
+      upstream.destroy();
+      clientSocket.destroy();
+    };
+    upstream.on('error', teardown);
+    clientSocket.on('close', () => upstream.destroy());
+    upstream.on('close', () => clientSocket.destroy());
+    upstream.on('connect', () => {
+      try {
+        clientSocket.write('HTTP/1.1 200 Connection Established\r\nProxy-agent: TACNOC\r\n\r\n');
+        if (head && head.length) upstream.write(head);
+        clientSocket.pipe(upstream);
+        upstream.pipe(clientSocket);
+      } catch {
+        teardown();
+      }
+    });
   }
 
   // --- request handling (shared by HTTP + decrypted HTTPS) ---

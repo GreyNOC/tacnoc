@@ -1,6 +1,6 @@
 # Release process
 
-GreyNOC Belcher follows a real quality gate — security review, checks/tests,
+TACNOC follows a real quality gate — security review, checks/tests,
 SBOM, versioned changelog, tagged commit, CI gate, checksummed artifacts, and a
 drafted (not auto-published) release.
 
@@ -10,20 +10,46 @@ drafted (not auto-published) release.
    CA/secret handling, at-rest encryption, extension isolation still intact).
 2. **Quality gate:** `npm run ci` (format check, lint, typecheck, tests) — must
    be green. Run `npm run test:e2e` on a machine with a display.
-3. **Dependency audit:** `npm audit --omit=dev --audit-level=high`.
+3. **Dependency audit:** `npm run audit` (full tree, high+). Electron is a
+   `devDependency` for packaging purposes but is the shipped runtime, so it must
+   not be omitted from the release audit.
 4. **SBOM:** `npm run sbom` → `sbom.json` (CycloneDX 1.5).
 5. **Version + changelog:** bump `version` in `package.json`, move items from
    *Unreleased* to the new version in `CHANGELOG.md`.
 6. **Tag:** commit, then `git tag vX.Y.Z` and push the tag.
 
-`npm run release:prepare` runs the gate + SBOM in one step.
+`npm run release:prepare` runs the quality gate + full audit + SBOM in one step.
 
 ## Building installers
 
 ```bash
-npm run dist        # builds the app, then electron-builder → dist/
+npm run dist        # builds the app, then electron-builder → dist/ (all configured targets)
 npm run checksums   # writes dist/SHA256SUMS-<os>.txt (per-OS: windows/macos/linux)
 ```
+
+**Windows one-shot:** `npm run dist:win` deletes previous releases from `dist/`,
+rebuilds, then produces both Windows artifacts and their checksum manifest:
+
+- `TACNOC-<version>-Portable-x64.exe` — portable, runs without installing.
+- `TACNOC-<version>-Setup-x64.exe` — NSIS installer.
+
+**Linux one-shot:** `npm run dist:linux` rebuilds and produces
+`TACNOC-<version>-linux-x64.tar.gz` — extract it and run `./tacnoc`.
+
+### Which Linux target can be built where
+
+| Target | On Linux | On Windows |
+|---|---|---|
+| `tar.gz` | yes | **yes** — electron-builder downloads the Linux Electron binary and repackages the app directory; no Linux-only tooling is involved |
+| `AppImage` | yes | **no** — packaging creates symlinks inside the image, and Windows refuses those without Developer Mode or elevation, so the build fails with `EPERM` |
+
+A Windows workstation can therefore cut the portable `.exe` **and** a runnable
+Linux `tar.gz`, but not an AppImage. Build AppImage on Linux
+(`npx electron-builder --linux AppImage`) or through the `release.yml` matrix.
+
+Note that a bare `npm run dist` builds every configured target for the host
+platform, so on Windows it will attempt AppImage and fail — use the per-OS
+scripts above.
 
 Build on each target OS (or via the `release.yml` GitHub Actions matrix). Output
 goes to `dist/`. `node_modules/node-sqlite3-wasm` is unpacked from the asar
@@ -78,12 +104,16 @@ they were signed.
 ### Cutting the tag
 
 ```bash
-npm run release:prepare      # ci gate + SBOM
+npm run release:prepare      # ci gate + full dependency audit + SBOM
 # bump version + update CHANGELOG, then:
 git tag vX.Y.Z && git push --tags   # triggers release.yml (drafts the release)
 ```
 
 ### v0.2.0 — cut UNSIGNED (operator decision, 2026-07-17)
+
+> Built and shipped before the app was renamed to TACNOC — the artifacts below
+> are genuinely named `GreyNOC Belcher-...`; that's what those SHA-256 hashes
+> were computed against, so the old name is kept here for accuracy.
 
 `v0.2.0` (the QA/QC pass — see `CHANGELOG.md`) was built and tagged locally with
 **no code signing**, a deliberate operator decision. Quality gate green (138
@@ -100,6 +130,8 @@ this host. The unsigned-install caveats below (SmartScreen/Gatekeeper, no
 in-binary proof of origin) apply identically to this cut.
 
 ### v0.1.0 — cut UNSIGNED (operator decision, 2026-07-16)
+
+> Also predates the TACNOC rename — same accuracy note as v0.2.0 above.
 
 `v0.1.0` was built and tagged locally with **no code signing**, a deliberate
 operator decision recorded here rather than silently shipped. Windows x64
@@ -134,7 +166,7 @@ next cut.
 
 ## CI
 
-- `ci.yml` runs the quality gate + build + production audit + SBOM on every push
+- `ci.yml` runs the quality gate + build + full dependency audit + SBOM on every push
   and PR to `main`.
 - `release.yml` (on a `v*` tag) builds installers across Windows/macOS/Linux,
   checksums them, generates the SBOM, and **drafts** a GitHub release with the

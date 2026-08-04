@@ -1,4 +1,4 @@
-/** Typed wrapper around the preload bridge (window.belcher). */
+/** Typed wrapper around the preload bridge (window.tacnoc). */
 
 import type { AppEvent, ProxyStatusDto, CaInfoDto } from '@shared/ipc.js';
 import type { ExchangeSummary, HistoryFilter, HistoryPage } from '@shared/query.js';
@@ -22,6 +22,17 @@ import type { AuditEntry } from '@shared/project.js';
 import type { JwtInspection } from '@engine/transforms/codec.js';
 import type { LineDiff, JsonDiffEntry, ByteDiff } from '@engine/compare/compare.js';
 import type { ExtensionManifest, Permission } from '@sdk/api.js';
+import type { TargetMap } from '@shared/target.js';
+import type { CaStatus, EngagementProfile, PreflightReport } from '@shared/engagement.js';
+import type { HuntRecallResult } from '@engine/analysis/huntMemory.js';
+import type { ScopeProposal } from '@engine/engagement/scopeProposal.js';
+import type {
+  WorkspaceFile,
+  WorkspaceListing,
+  WorkspaceSearchResult,
+} from '@engine/workspace/workspace.js';
+import type { SequenceAnalysis, TokenEncoding } from '@shared/sequencer.js';
+import type { AiConfig, AiKeyStatus, MeshRun, MeshRunPlan, MeshRunProgress } from '@shared/ai.js';
 
 interface Bridge {
   invoke<T = unknown>(method: string, ...args: unknown[]): Promise<T>;
@@ -30,11 +41,11 @@ interface Bridge {
 
 declare global {
   interface Window {
-    belcher: Bridge;
+    tacnoc: Bridge;
   }
 }
 
-const b = (): Bridge => window.belcher;
+const b = (): Bridge => window.tacnoc;
 
 export const api = {
   onEvent: (h: (e: AppEvent) => void) => b().onEvent(h),
@@ -57,6 +68,24 @@ export const api = {
   getProxyStatus: () => b().invoke<ProxyStatusDto>('getProxyStatus'),
   getCaInfo: () => b().invoke<CaInfoDto>('getCaInfo'),
   saveCaCertificate: () => b().invoke<string | null>('saveCaCertificate'),
+  getCaStatus: () => b().invoke<CaStatus>('getCaStatus'),
+  rotateCa: (reason: string) => b().invoke<CaStatus>('rotateCa', reason),
+  revokeCa: (reason: string) => b().invoke<CaStatus>('revokeCa', reason),
+
+  // engagement
+  getEngagementProfile: () => b().invoke<EngagementProfile>('getEngagementProfile'),
+  setEngagementProfile: (profile: EngagementProfile) =>
+    b().invoke<EngagementProfile>('setEngagementProfile', profile),
+  getPreflight: () => b().invoke<PreflightReport>('getPreflight'),
+  listWorkspace: () => b().invoke<WorkspaceListing>('listWorkspace'),
+  readWorkspaceFile: (path: string, maxBytes?: number) =>
+    b().invoke<WorkspaceFile>('readWorkspaceFile', path, maxBytes),
+  searchWorkspace: (query: string) => b().invoke<WorkspaceSearchResult>('searchWorkspace', query),
+  pickWorkspaceDirectory: () => b().invoke<string | null>('pickWorkspaceDirectory'),
+  recallHuntHistory: (query: Record<string, string> = {}, allPrograms = false) =>
+    b().invoke<HuntRecallResult>('recallHuntHistory', query, allPrograms),
+  clearHuntMemory: () => b().invoke<void>('clearHuntMemory'),
+  proposeScopeFromWorkspace: () => b().invoke<ScopeProposal>('proposeScopeFromWorkspace'),
 
   // scope + config
   getScope: () => b().invoke<ScopeConfig>('getScope'),
@@ -83,6 +112,7 @@ export const api = {
     b().invoke<void>('updateNotesTags', id, notes, tags),
   clearHistory: () => b().invoke<void>('clearHistory'),
   historyCount: () => b().invoke<number>('historyCount'),
+  getTargetMap: (maxExchanges = 100_000) => b().invoke<TargetMap>('getTargetMap', maxExchanges),
 
   // findings
   listFindings: (includeSuppressed = false) =>
@@ -111,6 +141,8 @@ export const api = {
   diffText: (a: string, bb: string) => b().invoke<LineDiff[]>('diffText', a, bb),
   diffJson: (a: string, bb: string) => b().invoke<JsonDiffEntry[]>('diffJson', a, bb),
   diffBytes: (a: string, bb: string) => b().invoke<ByteDiff>('diffBytes', a, bb),
+  analyzeTokenSamples: (samples: string[], encoding: TokenEncoding) =>
+    b().invoke<SequenceAnalysis>('analyzeTokenSamples', samples, encoding),
 
   // variation
   createVariationJob: (plan: VariationPlan) =>
@@ -129,6 +161,16 @@ export const api = {
     b().invoke<{ manifest: ExtensionManifest; granted: Permission[] }[]>('listExtensions'),
   loadExampleExtension: () =>
     b().invoke<{ manifest: ExtensionManifest; granted: Permission[] }[]>('loadExampleExtension'),
+
+  // ai mesh
+  getAiConfig: () => b().invoke<AiConfig>('getAiConfig'),
+  setAiConfig: (c: AiConfig) => b().invoke<void>('setAiConfig', c),
+  setAiApiKey: (key: string) => b().invoke<void>('setAiApiKey', key),
+  getAiKeyStatus: () => b().invoke<AiKeyStatus>('getAiKeyStatus'),
+  clearAiApiKey: () => b().invoke<void>('clearAiApiKey'),
+  startMeshRun: (plan: MeshRunPlan) => b().invoke<MeshRunProgress>('startMeshRun', plan),
+  stopMeshRun: (id: string) => b().invoke<void>('stopMeshRun', id),
+  getMeshRun: (id: string) => b().invoke<MeshRun | undefined>('getMeshRun', id),
 };
 
 export type Api = typeof api;

@@ -31,7 +31,7 @@ let projectDir: string;
 
 test.beforeAll(async () => {
   server = await startTestServer();
-  projectDir = path.join(os.tmpdir(), `belcher-e2e-full-${Date.now()}`);
+  projectDir = path.join(os.tmpdir(), `tacnoc-e2e-full-${Date.now()}`);
   app = await electron.launch({ args: [path.join(root, 'out/main/index.js')] });
   win = await app.firstWindow();
   await win.getByRole('button', { name: 'Create project' }).waitFor({ timeout: 20000 });
@@ -47,8 +47,8 @@ test('end-to-end: proxy capture, findings, and all views render with real data',
   // 1) Create project, start proxy, set scope, grab the CA — via the bridge.
   const setup = await win.evaluate(async (dir: string) => {
     const b = (
-      window as unknown as { belcher: { invoke: (m: string, ...a: unknown[]) => Promise<unknown> } }
-    ).belcher;
+      window as unknown as { tacnoc: { invoke: (m: string, ...a: unknown[]) => Promise<unknown> } }
+    ).tacnoc;
     await b.invoke('createProject', dir, 'e2e-full');
     const status = (await b.invoke('startProxy', '127.0.0.1', 0)) as { port: number };
     const ca = (await b.invoke('getCaInfo')) as { certPem: string };
@@ -83,6 +83,10 @@ test('end-to-end: proxy capture, findings, and all views render with real data',
   await win.getByText('/missing-headers').first().click();
   await expect(win.getByText('Send to Repeater →')).toBeVisible();
 
+  // 3b) Target Map groups the captured endpoint and can inspect it.
+  await win.getByRole('button', { name: 'Target Map' }).click();
+  await expect(win.getByText('/missing-headers').first()).toBeVisible();
+
   // 4) Findings view shows a passive finding (missing security headers).
   await win.getByRole('button', { name: 'Findings' }).click();
   await expect(
@@ -115,6 +119,14 @@ test('end-to-end: proxy capture, findings, and all views render with real data',
 
   await win.getByRole('button', { name: 'Variation' }).click();
   await expect(win.getByText('Controlled variation')).toBeVisible();
+
+  await win.getByRole('button', { name: 'Sequencer' }).click();
+  await expect(win.getByRole('button', { name: 'Analyze' })).toBeVisible();
+  // Actually run an analysis so analyzeTokenSamples executes in the real
+  // Electron main process (node:zlib/crypto), not just render the empty view.
+  await win.locator('textarea.sequence-input').fill('AAAAAAAAAAAAAAAA\n'.repeat(200).trim());
+  await win.getByRole('button', { name: 'Analyze' }).click();
+  await expect(win.getByText('poor', { exact: true })).toBeVisible({ timeout: 10000 });
 
   await win.getByRole('button', { name: 'CA Certificate' }).click();
   await expect(win.getByText(/trusting this CA is powerful/i)).toBeVisible();

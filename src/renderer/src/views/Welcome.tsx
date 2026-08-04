@@ -65,7 +65,7 @@ export function Welcome(): JSX.Element {
   return (
     <div className="welcome">
       <div className="card">
-        <h2 style={{ marginTop: 0 }}>GreyNOC Belcher</h2>
+        <h2 style={{ marginTop: 0 }}>TACNOC</h2>
         <p className="hint">
           An extensible web-application security research suite for{' '}
           <strong>authorized testing</strong>. The proxy binds to 127.0.0.1 and nothing is sent to

@@ -51,7 +51,7 @@ remaining future step.
   capabilities (checks/transforms/tabs/actions/traffic subscribers) and logs an
   error, so the app never advertises checks that can no longer run (fail-closed,
   not a silent detection bypass). Reload re-establishes them.
-- `dispose()` on `BelcherSession` — wired to the Electron `before-quit` — stops
+- `dispose()` on `TacnocSession` — wired to the Electron `before-quit` — stops
   automated work, closes the project, and `terminate()`s the child (SIGKILL
   fallback after a graceful `shutdown`), then removes the temp bootstrap dir. The
   extension host lives for the whole session, so it is torn down only here.
@@ -65,7 +65,7 @@ release config. Confirmed and fixed:
    emitting `ready`. Fix: single-settle guard + a swallowing `.catch` on the
    internal promise; awaiters still see the rejection.
 2. **Extension host child + temp dir leaked per app launch** — nothing terminated
-   it. Fix: `BelcherSession.dispose()` → `ExtensionHost.terminate()`, wired to
+   it. Fix: `TacnocSession.dispose()` → `ExtensionHost.terminate()`, wired to
    `before-quit`.
 3. **Failed-`activate()` rollback deleted a same-id extension's live
    registrations.** Fix: snapshot the registries before `activate()` and roll back

@@ -14,6 +14,9 @@ import * as path from 'node:path';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const includeDev = process.argv.includes('--dev');
+// Packaging tools conventionally keep Electron in devDependencies, but the
+// Electron binary is the shipped application runtime and must be in the SBOM.
+const packagedRuntimeDevDependencies = new Set(['electron']);
 
 const lock = JSON.parse(readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
 const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -35,9 +38,10 @@ const seen = new Set();
 for (const [loc, meta] of Object.entries(lock.packages)) {
   if (loc === '') continue; // the root project
   if (!loc.startsWith('node_modules/')) continue;
-  if (meta.dev && !includeDev) continue;
   const name = meta.name ?? loc.split('node_modules/').pop();
   if (!name || !meta.version) continue;
+  const packagedRuntime = packagedRuntimeDevDependencies.has(name);
+  if (meta.dev && !includeDev && !packagedRuntime) continue;
   const key = `${name}@${meta.version}`;
   if (seen.has(key)) continue;
   seen.add(key);
@@ -48,7 +52,7 @@ for (const [loc, meta] of Object.entries(lock.packages)) {
     name,
     version: meta.version,
     purl: purl(name, meta.version),
-    scope: meta.dev ? 'optional' : 'required',
+    scope: meta.dev && !packagedRuntime ? 'optional' : 'required',
   };
   if (meta.license) component.licenses = [{ license: { id: String(meta.license) } }];
   if (meta.resolved) component.externalReferences = [{ type: 'distribution', url: meta.resolved }];
@@ -84,5 +88,5 @@ const sbom = {
 const out = path.join(root, 'sbom.json');
 writeFileSync(out, JSON.stringify(sbom, null, 2) + '\n');
 console.log(
-  `Wrote ${path.relative(root, out)} — ${components.length} components (${includeDev ? 'incl. dev' : 'production only'}).`,
+  `Wrote ${path.relative(root, out)} — ${components.length} components (${includeDev ? 'incl. dev' : 'production + packaged runtime'}).`,
 );

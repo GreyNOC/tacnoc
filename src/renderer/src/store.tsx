@@ -11,16 +11,20 @@ import type { ProjectInfo } from '@shared/project.js';
 
 export type ViewId =
   | 'history'
+  | 'target'
   | 'intercept'
   | 'repeater'
   | 'findings'
   | 'scope'
   | 'variation'
+  | 'sequencer'
   | 'encoder'
   | 'compare'
   | 'certificate'
+  | 'engagement'
   | 'extensions'
   | 'audit'
+  | 'ai'
   | 'settings';
 
 export interface RepeaterSeed {

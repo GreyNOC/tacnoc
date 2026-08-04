@@ -1,0 +1,22 @@
+{
+  "$comment": [
+    "Plugin-scoped MCP server config, discovered automatically at the plugin root.",
+    "",
+    "${CLAUDE_PLUGIN_ROOT} resolves to this repo's location wherever the plugin is",
+    "installed, so the entry needs no absolute path. That expansion only happens in",
+    "PLUGIN context — a workspace registering this server directly (rather than",
+    "installing the plugin) should write its own .mcp.json with an absolute path",
+    "instead. See docs/mcp-server.md.",
+    "",
+    "The entry points at build output, which is gitignored: run `npm run build:mcp`",
+    "once after cloning, and again after changing anything under src/mcp or the",
+    "engine modules it imports."
+  ],
+  "mcpServers": {
+    "tacnoc": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/out/mcpsrv/mcp/index.js"]
+    }
+  }
+}

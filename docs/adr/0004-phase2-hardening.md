@@ -60,6 +60,6 @@ capture, findings, the encoder, and loading the worker-isolated example extensio
 
 ## Consequences
 
-- Verified end-to-end in the real Electron runtime (Node 20) as well as the
-  headless Node suite.
+- Verified end-to-end in the real Electron runtime (Node 20 at the time; the app
+  now ships Electron 43 on the Node 22.x line) as well as the headless Node suite.
 - The h2 secure-server refactor also removed ~200 lines of bespoke h2 code.

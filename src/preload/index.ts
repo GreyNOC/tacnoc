@@ -18,6 +18,6 @@ const api = {
   },
 };
 
-export type BelcherBridge = typeof api;
+export type TacnocBridge = typeof api;
 
-contextBridge.exposeInMainWorld('belcher', api);
+contextBridge.exposeInMainWorld('tacnoc', api);

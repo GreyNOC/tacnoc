@@ -12,7 +12,7 @@ let scanner: PassiveScanner;
 let dir: string;
 
 beforeAll(async () => {
-  dir = path.join(os.tmpdir(), `belcher-scan-${crypto.randomBytes(6).toString('hex')}`);
+  dir = path.join(os.tmpdir(), `tacnoc-scan-${crypto.randomBytes(6).toString('hex')}`);
   blobs = new BlobStore(path.join(dir, 'blobs'));
   scanner = new PassiveScanner(blobs, {
     maskCookies: true,

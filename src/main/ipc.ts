@@ -1,20 +1,27 @@
 /**
- * IPC dispatch for the main process. A single 'belcher:invoke' channel routes to
+ * IPC dispatch for the main process. A single 'tacnoc:invoke' channel routes to
  * a whitelisted handler map; session events are forwarded to the renderer over
- * 'belcher:event'. The renderer never touches engine internals directly.
+ * 'tacnoc:event'. The renderer never touches engine internals directly.
  */
 
 import { ipcMain, dialog, BrowserWindow, app } from 'electron';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BelcherSession } from '../engine/session.js';
-import { IPC_INVOKE, IPC_EVENT, type AppEvent, type CaInfoDto } from '../shared/ipc.js';
+import { TacnocSession } from '../engine/session.js';
+import {
+  IPC_INVOKE,
+  IPC_EVENT,
+  INVOKE_METHODS,
+  type AppEvent,
+  type CaInfoDto,
+} from '../shared/ipc.js';
 import { inspectJwt } from '../engine/transforms/codec.js';
 import { diffLines, diffJson, diffBytes } from '../engine/compare/compare.js';
+import { analyzeTokenSamples } from '../engine/analysis/sequencer.js';
 
 type Handler = (
-  session: BelcherSession,
+  session: TacnocSession,
   win: () => BrowserWindow | null,
   args: unknown[],
 ) => unknown;
@@ -75,7 +82,7 @@ const handlers: Record<string, Handler> = {
     const res = await dialog.showSaveDialog(win() ?? undefined!, {
       title: 'Export project',
       defaultPath: `${data.info.name}.gnbexport.json`,
-      filters: [{ name: 'Belcher export', extensions: ['json'] }],
+      filters: [{ name: 'TACNOC export', extensions: ['json'] }],
     });
     if (res.canceled || !res.filePath) return null;
     await fs.writeFile(res.filePath, JSON.stringify(data, null, 2));
@@ -85,7 +92,7 @@ const handlers: Record<string, Handler> = {
   async importProjectFromFile(session, win, [targetDir]) {
     const res = await dialog.showOpenDialog(win() ?? undefined!, {
       title: 'Import project export',
-      filters: [{ name: 'Belcher export', extensions: ['json'] }],
+      filters: [{ name: 'TACNOC export', extensions: ['json'] }],
       properties: ['openFile'],
     });
     if (res.canceled || !res.filePaths[0]) return null;
@@ -112,9 +119,16 @@ const handlers: Record<string, Handler> = {
 
   async saveCaCertificate(session, win) {
     const info = session.getCaInfo();
+    // A revoked CA has no certificate. Writing the empty string would hand the
+    // operator a 0-byte .crt and report success.
+    if (!info.certPem) {
+      throw new Error(
+        'This project has no CA certificate — it was revoked. Issue a new one first.',
+      );
+    }
     const res = await dialog.showSaveDialog(win() ?? undefined!, {
       title: 'Save project CA certificate',
-      defaultPath: 'greynoc-belcher-ca.crt',
+      defaultPath: 'greynoc-tacnoc-ca.crt',
       filters: [{ name: 'Certificate', extensions: ['crt', 'pem'] }],
     });
     if (res.canceled || !res.filePath) return null;
@@ -141,6 +155,7 @@ const handlers: Record<string, Handler> = {
     s.updateNotesTags(id as string, notes as string | null, tags as string[]),
   clearHistory: (s) => s.clearHistory(),
   historyCount: (s) => s.historyCount(),
+  getTargetMap: (s, _w, [max]) => s.getTargetMap((max as number) ?? 100_000),
 
   listFindings: (s, _w, [inc]) => s.listFindings(Boolean(inc)),
   setFindingSuppressed: (s, _w, [id, v]) => s.setFindingSuppressed(id as string, Boolean(v)),
@@ -162,6 +177,8 @@ const handlers: Record<string, Handler> = {
   diffJson: (_s, _w, [a, b]) => diffJson(a as string, b as string),
   diffBytes: (_s, _w, [a, b]) =>
     diffBytes(Buffer.from(a as string, 'base64'), Buffer.from(b as string, 'base64')),
+  analyzeTokenSamples: (_s, _w, [samples, encoding]) =>
+    analyzeTokenSamples(samples as string[], encoding as never),
 
   createVariationJob: (s, _w, [plan]) => s.createVariationJob(plan as never),
   runVariationJob: (s, _w, [id]) => s.runVariationJob(id as string),
@@ -182,14 +199,72 @@ const handlers: Record<string, Handler> = {
     await session.loadExtension(manifest, source, manifest.permissions);
     return session.listExtensions();
   },
+
+  // ---- engagement profile, workspace, preflight ----
+  getEngagementProfile: (s) => s.getEngagementProfile(),
+  setEngagementProfile: (s, _w, [p]) => {
+    s.setEngagementProfile(p as never);
+    return s.getEngagementProfile();
+  },
+  getPreflight: (s) => s.getPreflight(),
+  listWorkspace: (s) => s.listWorkspace(),
+  readWorkspaceFile: (s, _w, [rel, maxBytes]) =>
+    s.readWorkspaceFile(rel as string, typeof maxBytes === 'number' ? maxBytes : undefined),
+  searchWorkspace: (s, _w, [q]) => s.searchWorkspace(q as string),
+  async pickWorkspaceDirectory(_s, win) {
+    const res = await dialog.showOpenDialog(win() ?? undefined!, {
+      properties: ['openDirectory'],
+      title: 'Choose the engagement folder the AI may read',
+    });
+    return res.canceled ? null : res.filePaths[0];
+  },
+
+  recallHuntHistory: (s, _w, [q, all]) =>
+    s.recallHuntHistory((q as never) ?? {}, { allPrograms: Boolean(all) }),
+  clearHuntMemory: (s) => s.clearHuntMemory(),
+  proposeScopeFromWorkspace: (s) => s.proposeScopeFromWorkspace(),
+
+  // ---- certificate lifecycle ----
+  getCaStatus: (s) => s.getCaStatus(),
+  rotateCa: (s, _w, [reason]) => s.rotateCa((reason as string) ?? ''),
+  revokeCa: (s, _w, [reason]) => s.revokeCa((reason as string) ?? ''),
+
+  getAiConfig: (s) => s.getAiConfig(),
+  setAiConfig: (s, _w, [c]) => s.setAiConfig(c as never),
+  setAiApiKey: (s, _w, [k]) => s.setAiApiKey(k as string),
+  getAiKeyStatus: (s) => s.getAiKeyStatus(),
+  clearAiApiKey: (s) => s.clearAiApiKey(),
+  startMeshRun: (s, _w, [plan]) => s.startMeshRun(plan as never),
+  stopMeshRun: (s, _w, [id]) => s.stopMeshRun(id as string),
+  getMeshRun: (s, _w, [id]) => s.getMeshRun(id as string),
 };
 
 function ensureProjectPath(dir: string, name: string): string {
   const safe = name.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'project';
-  return dir.endsWith('.gnbproj') ? dir : path.join(dir, `${safe}.gnbproj`);
+  return dir.endsWith('.tacnocproj') ? dir : path.join(dir, `${safe}.tacnocproj`);
 }
 
-export function registerIpc(session: BelcherSession, getWindow: () => BrowserWindow | null): void {
+/**
+ * Fail loudly at startup if the renderer-facing allowlist (`INVOKE_METHODS`)
+ * and the actual dispatch table (`handlers`) drift apart — a method listed but
+ * unimplemented, or implemented but not on the allowlist. Keeps the allowlist a
+ * real contract instead of stale documentation.
+ */
+function assertHandlerParity(): void {
+  const implemented = new Set(Object.keys(handlers));
+  const allowed = new Set<string>(INVOKE_METHODS);
+  const missing = INVOKE_METHODS.filter((method) => !implemented.has(method));
+  const unlisted = [...implemented].filter((method) => !allowed.has(method));
+  if (missing.length || unlisted.length) {
+    throw new Error(
+      `IPC registry drift — missing handlers: [${missing.join(', ')}]; ` +
+        `handlers absent from the allowlist: [${unlisted.join(', ')}]`,
+    );
+  }
+}
+
+export function registerIpc(session: TacnocSession, getWindow: () => BrowserWindow | null): void {
+  assertHandlerParity();
   ipcMain.handle(IPC_INVOKE, async (_event, method: string, args: unknown[]) => {
     const handler = handlers[method];
     if (!handler) throw new Error(`unknown method: ${method}`);
@@ -219,4 +294,8 @@ export function registerIpc(session: BelcherSession, getWindow: () => BrowserWin
   session.on('emergency-stop', forward('emergency-stop'));
   session.on('ws-message', forward('ws-message'));
   session.on('project-open', forward('project-open'));
+  session.on('mesh-step', forward('mesh-step'));
+  session.on('mesh-progress', forward('mesh-progress'));
+  session.on('ca-changed', forward('ca-changed'));
+  session.on('engagement-changed', forward('engagement-changed'));
 }

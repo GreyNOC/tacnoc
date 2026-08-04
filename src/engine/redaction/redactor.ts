@@ -13,6 +13,7 @@
  * redaction protects the *derived* artifacts (logs, evidence, diagnostics).
  */
 
+import * as zlib from 'node:zlib';
 import type { HttpHeader } from '../../shared/model.js';
 import type { RedactionConfig } from '../../shared/config.js';
 
@@ -63,6 +64,12 @@ const SECRET_PATTERNS: SecretPattern[] = [
   { kind: 'github-token', re: /\bgh[posru]_[A-Za-z0-9]{20,}\b/g },
   { kind: 'slack-token', re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g },
   { kind: 'stripe-key', re: /\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
+  // LLM provider keys. TACNOC prompts for one of these itself, which makes it
+  // the credential most likely to end up pasted into a note, a captured
+  // request, or an engagement document — and hunt memory is a durable,
+  // cross-engagement store that redacts on the way in.
+  { kind: 'anthropic-key', re: /\bsk-ant-[A-Za-z0-9_-]{16,}/g },
+  { kind: 'openai-key', re: /\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{16,}/g },
   { kind: 'bearer', re: /\bBearer\s+[A-Za-z0-9\-._~+/]{12,}=*/gi },
   { kind: 'basic', re: /\bBasic\s+[A-Za-z0-9+/]{12,}={0,2}/gi },
   // Generic key=value where the key name is sensitive. Masks the value only.
@@ -177,6 +184,107 @@ export interface SensitivityReport {
   hasTokens: boolean;
   /** Header/param names that triggered the report (for the warning dialog). */
   fields: string[];
+}
+
+/**
+ * Structurally redact an arbitrary AI-mesh tool result before it egresses to the
+ * model provider. Unlike a flat text pass, this decodes `bodyBase64` fields and
+ * masks patterns in the DECODED bytes (so secrets in POST bodies / JSON responses
+ * are actually caught, not left as reversible base64), and masks structured
+ * `headers` arrays via the header rules (so cookies / Authorization / credential
+ * headers are stripped even though JSON structure breaks key:value adjacency).
+ * Everything else is walked recursively and pattern-masked. Best-effort on body
+ * contents (pattern-based), thorough on headers.
+ */
+export function redactAiValue(value: unknown, redactor: Redactor): unknown {
+  if (typeof value === 'string') return redactor.redactText(value);
+  if (Array.isArray(value)) return value.map((v) => redactAiValue(v, redactor));
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const encoding = typeof obj.contentEncoding === 'string' ? obj.contentEncoding : undefined;
+    const out: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(obj)) {
+      if (key === 'headers' && isHeaderArray(v)) {
+        out[key] = redactor.redactHeaders(v);
+      } else if (key === 'bodyBase64' && typeof v === 'string') {
+        // Decompress (if encoded) so patterns match the real bytes, redact, re-encode.
+        const body = redactBase64Body(v, redactor, encoding);
+        out.bodyBase64 = body.bodyBase64;
+        out.contentEncoding = body.contentEncoding; // undefined once decompressed
+      } else if (key === 'contentEncoding') {
+        // Emitted alongside bodyBase64 above; keep it only when there is no body.
+        if (!('bodyBase64' in obj)) out.contentEncoding = v;
+      } else if ((key === 'url' || key === 'target') && typeof v === 'string') {
+        // redactUrl masks sensitive query params (session=, sig=, code=, token=…).
+        out[key] = redactor.redactUrl(v);
+      } else {
+        out[key] = redactAiValue(v, redactor);
+      }
+    }
+    return out;
+  }
+  return value;
+}
+
+function isHeaderArray(v: unknown): v is HttpHeader[] {
+  return (
+    Array.isArray(v) &&
+    v.every(
+      (h) =>
+        !!h &&
+        typeof h === 'object' &&
+        typeof (h as HttpHeader).name === 'string' &&
+        typeof (h as HttpHeader).value === 'string',
+    )
+  );
+}
+
+const MAX_DECOMPRESSED = 8 * 1024 * 1024; // guard against decompression bombs
+
+/** Best-effort decompress a captured body by Content-Encoding; null if it cannot. */
+function tryDecompress(raw: Buffer, encoding?: string): Buffer | null {
+  if (!encoding) return null;
+  const e = encoding.trim().toLowerCase();
+  const opts = { maxOutputLength: MAX_DECOMPRESSED };
+  try {
+    if (e === 'gzip' || e === 'x-gzip') return zlib.gunzipSync(raw, opts);
+    if (e === 'br') return zlib.brotliDecompressSync(raw, { maxOutputLength: MAX_DECOMPRESSED });
+    if (e === 'deflate') {
+      try {
+        return zlib.inflateSync(raw, opts);
+      } catch {
+        return zlib.inflateRawSync(raw, opts);
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Redact a base64 body: decompress first when Content-Encoded (so patterns match
+ * the plaintext), pattern-redact byte-safely (latin1), and re-encode. When a body
+ * was decompressed the returned `contentEncoding` is undefined (it now holds
+ * plaintext); otherwise the original encoding is preserved.
+ */
+function redactBase64Body(
+  b64: string,
+  redactor: Redactor,
+  encoding?: string,
+): { bodyBase64: string; contentEncoding: string | undefined } {
+  try {
+    const raw = Buffer.from(b64, 'base64');
+    const decompressed = tryDecompress(raw, encoding);
+    const bytes = decompressed ?? raw;
+    const redacted = redactor.redactText(bytes.toString('latin1'));
+    return {
+      bodyBase64: Buffer.from(redacted, 'latin1').toString('base64'),
+      contentEncoding: decompressed ? undefined : encoding,
+    };
+  } catch {
+    return { bodyBase64: b64, contentEncoding: encoding };
+  }
 }
 
 /**

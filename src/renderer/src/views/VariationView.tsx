@@ -35,6 +35,7 @@ export function VariationView(): JSX.Element {
     { marker: '{{0}}', kind: 'builtin', values: '', from: 0, to: 10, step: 1 },
   ]);
   const [markers, setMarkers] = useState('');
+  const [extractors, setExtractors] = useState('');
   const [concurrency, setConcurrency] = useState(4);
   const [rps, setRps] = useState(8);
   const [maxReq, setMaxReq] = useState(500);
@@ -64,9 +65,20 @@ export function VariationView(): JSX.Element {
       maxRequestsPerJob: maxReq,
     },
     responseMarkers: markers
-      .split(',')
+      .split(/\r?\n/)
       .map((m) => m.trim())
       .filter(Boolean),
+    responseExtractors: extractors
+      .split(/\r?\n/)
+      .map((line) => {
+        const separator = line.indexOf('::');
+        if (separator < 1) return undefined;
+        return {
+          name: line.slice(0, separator).trim(),
+          pattern: line.slice(separator + 2).trim(),
+        };
+      })
+      .filter((value): value is { name: string; pattern: string } => !!value),
   });
 
   const prepare = async (): Promise<void> => {
@@ -239,12 +251,22 @@ export function VariationView(): JSX.Element {
               </div>
             ))}
 
-            <label>Response markers (comma-separated regexes)</label>
-            <input
+            <label>Response markers (one regex per line)</label>
+            <textarea
               style={{ width: '100%' }}
               value={markers}
               onChange={(e) => setMarkers(e.target.value)}
-              placeholder='e.g. error, "id":\d+'
+              placeholder={'error\n"authenticated":false'}
+            />
+
+            <label style={{ display: 'block', marginTop: 8 }}>
+              Named response extractors (one <span className="mono">name :: regex</span> per line)
+            </label>
+            <textarea
+              style={{ width: '100%' }}
+              value={extractors}
+              onChange={(e) => setExtractors(e.target.value)}
+              placeholder={'csrf :: name="csrf" value="([^"]+)"\nuserId :: "id":(\\d+)'}
             />
 
             <div className="row" style={{ marginTop: 10, flexWrap: 'wrap' }}>
@@ -294,8 +316,12 @@ export function VariationView(): JSX.Element {
                   <th>Payload</th>
                   <th>Status</th>
                   <th>Len</th>
+                  <th>Words</th>
+                  <th>Lines</th>
                   <th>ms</th>
+                  <th>Hash</th>
                   <th>Markers</th>
+                  <th>Extracted</th>
                 </tr>
               </thead>
               <tbody>
@@ -304,14 +330,27 @@ export function VariationView(): JSX.Element {
                     <td className="mono">{r.index}</td>
                     <td className="mono">{r.payloads.join(', ')}</td>
                     <td className="mono">{r.skipped ? 'skip' : r.error ? 'ERR' : r.status}</td>
-                    <td className="mono">{r.responseLength}</td>
+                    <td className="mono">
+                      {r.responseLength}
+                      {r.responseTruncated ? '+' : ''}
+                    </td>
+                    <td className="mono">{r.responseWords ?? '—'}</td>
+                    <td className="mono">{r.responseLines ?? '—'}</td>
                     <td className="mono">{r.durationMs}</td>
+                    <td className="mono">{r.responseHash ?? '—'}</td>
                     <td className="mono">{r.markerHits?.join(' | ')}</td>
+                    <td className="mono">
+                      {r.extracted
+                        ? Object.entries(r.extracted)
+                            .map(([name, value]) => `${name}=${value}`)
+                            .join(' | ')
+                        : ''}
+                    </td>
                   </tr>
                 ))}
                 {results.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="empty">
+                    <td colSpan={10} className="empty">
                       Prepare a job to see the request count, then run it.
                     </td>
                   </tr>

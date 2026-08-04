@@ -6,8 +6,8 @@
 # code signing (CSC_LINK / identity) before public distribution, or ship
 # checksummed-only builds knowingly. See RELEASE.md.
 
-appId: com.greynoc.belcher
-productName: GreyNOC Belcher
+appId: com.greynoc.tacnoc
+productName: TACNOC
 copyright: GreyNOC (authorized security research)
 
 directories:
@@ -33,16 +33,24 @@ asarUnpack:
 
 win:
   target:
-    - target: nsis
+    - target: nsis # installer (.exe)
       arch: [x64]
-    - target: zip
+    - target: portable # single self-contained .exe, runs without installing
       arch: [x64]
   artifactName: ${productName}-${version}-${arch}.${ext}
 
+# The NSIS installer and the portable build both emit a .exe, so give each a
+# distinct artifactName — otherwise they collide on one filename in dist/.
 nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-Setup-${arch}.${ext}
+
+portable:
+  # Extract to a stable per-version dir under %TEMP% (not a random one each run).
+  unpackDirName: TACNOC-${version}
+  artifactName: ${productName}-${version}-Portable-${arch}.${ext}
 
 mac:
   category: public.app-category.developer-tools
@@ -53,9 +61,15 @@ mac:
 
 linux:
   category: Development
+  artifactName: ${productName}-${version}-linux-${arch}.${ext}
   target:
     - AppImage
     - tar.gz
+# AppImage CANNOT be built from Windows: packaging it creates symlinks inside the
+# image and Windows refuses those without Developer Mode or elevation, so the
+# build dies with EPERM. `tar.gz` cross-builds from any host, so that is the
+# Linux artifact a Windows workstation can produce — extract and run ./tacnoc.
+# Build AppImage on Linux, or through the release.yml matrix. See RELEASE.md.
 
 # Emit a per-build metadata file listing produced artifacts.
 artifactBuildCompleted: null

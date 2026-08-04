@@ -2,7 +2,7 @@
  * ProjectStore ties together the database, blob store, CA, and repositories for
  * one open research project. A project lives in a directory:
  *
- *   <name>.gnbproj/
+ *   <name>.tacnocproj/
  *     belcher.db        SQLite (metadata, history rows, findings, audit)
  *     blobs/            content-addressed body store
  *     ca.pem            public project CA certificate (safe to share/trust)
@@ -130,6 +130,11 @@ export class ProjectStore {
   }
   get config(): EngineConfig {
     return this.meta.getConfig() ?? defaultEngineConfig();
+  }
+
+  /** How the CA private key is held, for the certificate status display. */
+  get caKeyBackend(): { secure: boolean; name: string } {
+    return { secure: this.secretStore.isSecure(), name: this.secretStore.backendName() };
   }
 
   // --- saved repeater requests ---

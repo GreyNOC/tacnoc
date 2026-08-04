@@ -9,7 +9,7 @@
 import type { ScopeConfig, ScopeDecision, ScopeRule, ScopeTarget } from '../../shared/scope.js';
 import type { Scheme } from '../../shared/model.js';
 
-function normalizeHost(host: string): string {
+export function normalizeHost(host: string): string {
   // Strip ALL trailing dots (not just one) so the safety gate's canonicalization
   // is exhaustive — a residual dot would let an exclude rule under-match.
   return host.trim().toLowerCase().replace(/\.+$/, '');

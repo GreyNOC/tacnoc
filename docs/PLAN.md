@@ -1,4 +1,4 @@
-# GreyNOC Belcher — Milestone Plan
+# TACNOC — Milestone Plan
 
 Original work. Inspired by the *workflow* of intercepting-proxy tooling; no
 proprietary code, UI, branding, or licensed assets are copied.
@@ -35,9 +35,10 @@ M5; Phase 3 → M6 (scanner); Phase 4 → M6 (variation); Phase 5 → M9.
 ## Assumptions
 
 1. ~~Electron's bundled Node exposes `node:sqlite`.~~ **Resolved (ADR 0003):**
-   it does NOT (Electron 33 ships Node 20.18). Storage was switched to
-   `node-sqlite3-wasm`, verified to run identically under the test-runner Node
-   and Electron's Node, so tests verify what ships.
+   it did NOT in the then-current Electron 33 (Node 20.18). Storage was switched
+   to `node-sqlite3-wasm`, verified to run identically under the test-runner Node
+   and Electron's Node, so tests verify what ships. The app now pins Electron 43
+   (Node 22.x line) and retains the WASM backend.
 2. Node's HTTP parser (via `http.Server`/`http.request`) is the robustness
    boundary for malformed traffic: it rejects truly malformed messages rather
    than crashing. We preserve fidelity via `rawHeaders` + captured body and a

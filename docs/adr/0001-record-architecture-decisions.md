@@ -5,7 +5,7 @@
 
 ## Context
 
-GreyNOC Belcher is a long-lived security-research tool. Architectural choices
+TACNOC is a long-lived security-research tool. Architectural choices
 (stack, storage, trust boundaries, TLS interception design) have safety and
 maintenance consequences that outlive any single change. We need a durable,
 reviewable record of *why* decisions were made, not just *what* the code does.

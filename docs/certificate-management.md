@@ -1,6 +1,6 @@
 # Certificate management (TLS interception)
 
-To read HTTPS traffic, GreyNOC Belcher terminates TLS locally with certificates
+To read HTTPS traffic, TACNOC terminates TLS locally with certificates
 signed by a **project-scoped Certificate Authority (CA)** it generates on your
 machine. This is powerful and requires your explicit, informed consent.
 

@@ -15,7 +15,7 @@ import type { BodyLimits } from '../../src/shared/config.js';
 
 const tmpRoots: string[] = [];
 async function tmp(): Promise<string> {
-  const dir = path.join(os.tmpdir(), `belcher-store-${crypto.randomBytes(6).toString('hex')}`);
+  const dir = path.join(os.tmpdir(), `tacnoc-store-${crypto.randomBytes(6).toString('hex')}`);
   await fs.mkdir(dir, { recursive: true });
   tmpRoots.push(dir);
   return dir;
@@ -174,7 +174,7 @@ describe('body collector', () => {
 describe('project reopen + export/import', () => {
   it('persists exchanges across close/reopen', async () => {
     const dir = await tmp();
-    const projDir = path.join(dir, 'proj.gnbproj');
+    const projDir = path.join(dir, 'proj.tacnocproj');
     // The secret store (holding the data-encryption key) persists like the app's
     // on-disk store, so reopen uses the SAME instance across close/open.
     const secretStore = new InMemorySecretStore();
@@ -194,7 +194,7 @@ describe('project reopen + export/import', () => {
 
   it('round-trips through versioned export/import including body bytes', async () => {
     const dir = await tmp();
-    const s1 = await ProjectStore.create(path.join(dir, 'a.gnbproj'), {
+    const s1 = await ProjectStore.create(path.join(dir, 'a.tacnocproj'), {
       name: 'Export',
       secretStore: new InMemorySecretStore(),
     });
@@ -203,7 +203,7 @@ describe('project reopen + export/import', () => {
     s1.close();
     expect(exported.exchanges).toHaveLength(1);
 
-    const s2 = await ProjectStore.import(exported, path.join(dir, 'b.gnbproj'), {
+    const s2 = await ProjectStore.import(exported, path.join(dir, 'b.tacnocproj'), {
       secretStore: new InMemorySecretStore(),
     });
     const back = s2.history.get('ex1')!;
@@ -229,7 +229,7 @@ async function readAllUnder(dir: string): Promise<Buffer> {
 describe('at-rest encryption', () => {
   it('encrypts bodies and headers on disk but round-trips through the key', async () => {
     const dir = await tmp();
-    const projDir = path.join(dir, 'enc.gnbproj');
+    const projDir = path.join(dir, 'enc.tacnocproj');
     const secretStore = new InMemorySecretStore();
     const store = await ProjectStore.create(projDir, { name: 'Enc', secretStore });
     expect(store.encryptedAtRest).toBe(true);
@@ -278,7 +278,7 @@ describe('at-rest encryption', () => {
   it('exports ALL exchanges, paging beyond the 2000-row page size', async () => {
     const dir = await tmp();
     const secretStore = new InMemorySecretStore();
-    const store = await ProjectStore.create(path.join(dir, 'big.gnbproj'), {
+    const store = await ProjectStore.create(path.join(dir, 'big.tacnocproj'), {
       name: 'Big',
       secretStore,
     });
@@ -299,7 +299,7 @@ describe('at-rest encryption', () => {
 
   it('cannot read encrypted content without the data-encryption key', async () => {
     const dir = await tmp();
-    const projDir = path.join(dir, 'nokey.gnbproj');
+    const projDir = path.join(dir, 'nokey.tacnocproj');
     const store = await ProjectStore.create(projDir, {
       name: 'N',
       secretStore: new InMemorySecretStore(),

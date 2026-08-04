@@ -6,7 +6,7 @@ import { promises as fs } from 'node:fs';
 import { CertificateAuthority } from '../../src/engine/ca/certificateAuthority.js';
 import { InMemorySecretStore } from '../../src/engine/ca/secretStore.js';
 
-const tmpDir = path.join(os.tmpdir(), `belcher-ca-${process.pid}`);
+const tmpDir = path.join(os.tmpdir(), `tacnoc-ca-${process.pid}`);
 
 afterAll(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });

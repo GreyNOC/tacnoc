@@ -28,6 +28,8 @@ import type {
   RedirectHop,
   TlsInfo,
 } from '../../shared/repeater.js';
+import type { EngagementProfile } from '../../shared/engagement.js';
+import { applyIdentity } from '../engagement/identity.js';
 import { evaluateScope } from '../scope/scope.js';
 import { BlobStore } from '../storage/blobStore.js';
 import { bytesToBody } from '../storage/bodyCollector.js';
@@ -39,6 +41,12 @@ export interface RepeaterDeps {
   blobStore: BlobStore;
   limits: EngineLimits;
   getScope: () => ScopeConfig;
+  /**
+   * Engagement profile, read per request so a profile change takes effect
+   * immediately. When it mandates identification, the required User-Agent and
+   * identity headers are applied to what actually goes on the wire.
+   */
+  getEngagement?: () => EngagementProfile | undefined;
 }
 
 interface SingleResponse {
@@ -71,6 +79,7 @@ export class Repeater {
     let method = parsed.method;
     let path = originForm(parsed.target);
     let headers = [...parsed.headers];
+    let sentHeaders = headers;
     let body = Buffer.from(parsed.body, 'utf8');
     const firstExchangeId = crypto.randomUUID();
     let tls: TlsInfo | undefined;
@@ -87,13 +96,19 @@ export class Repeater {
         if (cookie) headers = upsertHeader(headers, 'Cookie', cookie);
       }
 
+      // Apply engagement identity to what actually goes on the wire, and record
+      // exactly that in history — a compliance check against captured traffic is
+      // only meaningful if history shows the bytes the target received.
+      const outgoing = applyIdentity(headers, this.deps.getEngagement?.());
+      sentHeaders = outgoing;
+
       const single = await this.sendOnce(
         scheme,
         host,
         port,
         method,
         path,
-        headers,
+        outgoing,
         body,
         options.timeoutMs,
       );
@@ -165,7 +180,7 @@ export class Repeater {
           target: path,
           url: `${scheme}://${host}:${port}${path}`,
           httpVersion: parsed.httpVersion,
-          headers,
+          headers: sentHeaders,
           body: await bytesToBody(body, this.deps.limits.body, this.deps.blobStore),
         },
         response,

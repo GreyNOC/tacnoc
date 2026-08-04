@@ -119,7 +119,7 @@ export class ExtensionHost {
     // Write the child bootstrap to a private temp dir and fork it as a separate
     // OS process (runs as plain Node even under Electron via ELECTRON_RUN_AS_NODE),
     // with a minimal env, a bounded heap, no inherited stdio, and its own cwd.
-    this.childDir = fs.mkdtempSync(path.join(os.tmpdir(), 'belcher-ext-'));
+    this.childDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tacnoc-ext-'));
     const entry = path.join(this.childDir, 'extension-host.cjs');
     fs.writeFileSync(entry, EXTENSION_HOST_SOURCE, { mode: 0o600 });
     this.child = fork(entry, [], {

@@ -126,4 +126,4 @@ export function createMemorySink(): { sink: LogSink; records: LogRecord[] } {
   return { sink: (r) => records.push(r), records };
 }
 
-export const rootLogger = new Logger('belcher');
+export const rootLogger = new Logger('tacnoc');

@@ -7,11 +7,11 @@ through a **versioned, capability-based** API. The current SDK version is
 
 ## Contract
 
-An extension is a CommonJS module that exports `activate(belcher)`:
+An extension is a CommonJS module that exports `activate(tacnoc)`:
 
 ```js
-function activate(belcher) {
-  belcher.log('hello from my extension, sdk ' + belcher.version);
+function activate(tacnoc) {
+  tacnoc.log('hello from my extension, sdk ' + tacnoc.version);
   // register capabilities here (each guarded by a feature check)
 }
 module.exports = { activate: activate };
@@ -42,14 +42,14 @@ exchange handed to an extension — not the absence of these API methods.
 
 | Permission | Grants | Elevated? |
 |---|---|---|
-| `read-traffic` | `belcher.onTraffic(cb)` — **sanitized** traffic events (redacted headers, no bodies) | ✅ requires explicit approval |
-| `passive-checks` | `belcher.registerScannerCheck(check)` | |
-| `transforms` | `belcher.registerTransform(t)` | |
-| `findings` | `belcher.createFinding(f)` | ✅ requires explicit approval |
-| `ui-tabs` | `belcher.registerEditorTab(tab)` — `render()` returns **plain text** | |
-| `context-menu` | `belcher.registerContextMenuAction(a)` | |
+| `read-traffic` | `tacnoc.onTraffic(cb)` — **sanitized** traffic events (redacted headers, no bodies) | ✅ requires explicit approval |
+| `passive-checks` | `tacnoc.registerScannerCheck(check)` | |
+| `transforms` | `tacnoc.registerTransform(t)` | |
+| `findings` | `tacnoc.createFinding(f)` | ✅ requires explicit approval |
+| `ui-tabs` | `tacnoc.registerEditorTab(tab)` — `render()` returns **plain text** | |
+| `context-menu` | `tacnoc.registerContextMenuAction(a)` | |
 
-`belcher.log(msg)` is always available and writes to the redacted local log.
+`tacnoc.log(msg)` is always available and writes to the redacted local log.
 
 > **Note:** `ui-tabs` and `context-menu` registrations are accepted and validated
 > by the host, but the desktop UI does not yet render editor tabs or context-menu
@@ -69,7 +69,7 @@ The host and the extension exchange only IPC messages over a capability RPC
 bridge — the extension never receives a reference to any host object (engine,
 session, secrets, DB), and it lives in a **separate OS memory space**, so even a
 full escape cannot read host-process memory. Inside the child, each extension is
-*additionally* evaluated in a Node `vm` context that exposes only the `belcher`
+*additionally* evaluated in a Node `vm` context that exposes only the `tacnoc`
 API and a minimal `console`, with no `require`/`process`/`module` in scope,
 in-context code generation (`eval`/`new Function`) disabled, and a time-boxed
 top-level evaluation.

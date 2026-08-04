@@ -27,6 +27,8 @@ jobs:
       - run: npm ci
       - name: Quality gate
         run: npm run ci
+      - name: Full dependency audit (high+)
+        run: npm run audit
       - name: Build installers
         # Code signing activates automatically ONLY when the corresponding
         # secrets are configured; otherwise electron-builder produces UNSIGNED

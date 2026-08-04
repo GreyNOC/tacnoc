@@ -1,5 +1,5 @@
 /**
- * BelcherSession — the engine facade the desktop app talks to.
+ * TacnocSession — the engine facade the desktop app talks to.
  *
  * It owns the open project and wires the proxy, passive scanner, repeater,
  * variation engine, and extension host together. Captured exchanges flow:
@@ -39,18 +39,63 @@ import { VariationEngine } from './variation/variationEngine.js';
 import { ExtensionHost } from '../sdk/host.js';
 import { readBodyBytes } from './storage/bodyCollector.js';
 import { BUILTIN_TRANSFORMS, applyTransform as applyBuiltinTransform } from './transforms/codec.js';
-import { detectSensitive } from './redaction/redactor.js';
+import { detectSensitive, Redactor, redactAiValue } from './redaction/redactor.js';
 import { isLoopbackBind } from './config.js';
 import { Logger, rootLogger } from './logging/logger.js';
 import type { SecretStore } from './ca/secretStore.js';
 import type { Scheme } from '../shared/model.js';
+import type { TargetMap } from '../shared/target.js';
+import { buildTargetMap } from './target/siteMap.js';
+import { emptyScope } from '../shared/scope.js';
+import type { AiConfig, AiKeyStatus, MeshRun, MeshRunPlan, MeshRunProgress } from '../shared/ai.js';
+import { normalizeAiConfig } from '../shared/ai.js';
+import { MeshOrchestrator } from './ai/orchestrator.js';
+import { buildTools } from './ai/tools.js';
+import { AnthropicProvider } from './ai/providers/anthropic.js';
+import type {
+  CaRevocation,
+  CaStatus,
+  EngagementProfile,
+  IdentityCompliance,
+  PreflightReport,
+  WorkspaceSummary,
+} from '../shared/engagement.js';
+import { defaultEngagementProfile, validateEngagementProfile } from '../shared/engagement.js';
+import { checkIdentity, identityEnforced } from './engagement/identity.js';
+import { buildPreflight } from './engagement/preflight.js';
+import {
+  proposeScope,
+  type ProposalSource,
+  type ScopeProposal,
+} from './engagement/scopeProposal.js';
+import { caInstallInstructions } from './ca/installInstructions.js';
+import { listWorkspace, readWorkspaceFile, searchWorkspace } from './workspace/workspace.js';
+import { rankAttackSurface, type SurfaceRanking } from './analysis/surface.js';
+import { proveDifferential, type ProofResult } from './analysis/proof.js';
+import {
+  HuntMemory,
+  type HuntOutcomeInput,
+  type HuntOutcomeRecord,
+  type HuntRecallResult,
+} from './analysis/huntMemory.js';
 
 const VIEW_MAX_BYTES = 4 * 1024 * 1024;
+const ENGAGEMENT_KEY = 'project.engagement';
+const CA_HISTORY_KEY = 'project.ca.history';
+const MAX_CA_HISTORY = 50;
 
 export interface SessionOptions {
   appVersion?: string;
   logger?: Logger;
   secretStoreFactory?: (dir: string) => SecretStore;
+  /** App-level secret store for the AI provider API key (never per-project). */
+  aiSecretStore?: SecretStore;
+  /**
+   * Directory for the cross-engagement hunt memory. App-level on purpose: the
+   * point is that what one hunt learned is available to the next, including in
+   * a different project. Omit to disable the feature entirely.
+   */
+  huntMemoryDir?: string;
 }
 
 export interface ProxyStatus {
@@ -60,7 +105,7 @@ export interface ProxyStatus {
   loopbackOnly: boolean;
 }
 
-export class BelcherSession extends EventEmitter {
+export class TacnocSession extends EventEmitter {
   private project?: ProjectStore;
   private proxy?: ProxyServer;
   private readonly interceptor = new Interceptor();
@@ -72,12 +117,26 @@ export class BelcherSession extends EventEmitter {
   private readonly log: Logger;
   private readonly appVersion: string;
   private readonly secretStoreFactory?: (dir: string) => SecretStore;
+  private readonly aiSecretStore?: SecretStore;
+  private readonly huntMemory?: HuntMemory;
+  private readonly mesh: MeshOrchestrator;
+  private static readonly AI_KEY = 'anthropic.apiKey';
+  /** Best-effort secret-pattern redaction for the AI egress path (opt-in). */
+  private readonly aiRedactor = new Redactor({
+    maskCookies: true,
+    maskAuthorization: true,
+    maskSecretPatterns: true,
+  });
 
   constructor(options: SessionOptions = {}) {
     super();
     this.log = options.logger ?? rootLogger;
     this.appVersion = options.appVersion ?? '0.1.0';
     if (options.secretStoreFactory) this.secretStoreFactory = options.secretStoreFactory;
+    if (options.aiSecretStore) this.aiSecretStore = options.aiSecretStore;
+    if (options.huntMemoryDir) {
+      this.huntMemory = new HuntMemory({ directory: options.huntMemoryDir });
+    }
     this.extHost = new ExtensionHost(
       { maskCookies: true, maskAuthorization: true, maskSecretPatterns: true },
       this.log,
@@ -93,6 +152,19 @@ export class BelcherSession extends EventEmitter {
     this.interceptor.on('response-held', (v) => this.emit('intercept-response', v));
     this.interceptor.on('pending-changed', () => this.emit('intercept-pending'));
     this.interceptor.on('state', (s) => this.emit('intercept-state', s));
+
+    // The AI mesh lives for the whole session; its runs are project-scoped and
+    // read scope/audit live from the open project. Emergency stop aborts every
+    // in-flight mesh run alongside the variation jobs.
+    this.mesh = new MeshOrchestrator({
+      getScope: () => this.project?.scope ?? emptyScope(),
+      audit: (e) => this.project?.audit.append(e),
+      onStep: (s) => this.emit('mesh-step', s),
+      onProgress: (p) => this.emit('mesh-progress', p),
+      redactResult: (v) => redactAiValue(v, this.aiRedactor),
+      logger: this.log,
+    });
+    this.on('emergency-stop', () => this.mesh.stopAll());
   }
 
   // ---- project lifecycle ----
@@ -127,6 +199,7 @@ export class BelcherSession extends EventEmitter {
       onExchange: (ex) => this.ingest(ex),
       audit: { append: (e) => project.audit.append(e) },
       logger: this.log,
+      getEngagement: () => this.engagementProfileOrUndefined(),
     });
     this.variation.on('progress', (p: JobProgress) => this.emit('job-progress', p));
     this.variation.on('done', (p: JobProgress) => this.emit('job-done', p));
@@ -152,12 +225,19 @@ export class BelcherSession extends EventEmitter {
       blobStore: project.blobs,
       limits: project.config.limits,
       getScope: () => project.scope,
+      getEngagement: () => this.engagementProfileOrUndefined(),
     });
+  }
+
+  /** Profile for the enforcement path, tolerating a project closed mid-flight. */
+  private engagementProfileOrUndefined(): EngagementProfile | undefined {
+    return this.project ? this.getEngagementProfile() : undefined;
   }
 
   async closeProject(): Promise<void> {
     if (this.proxy) await this.stopProxy();
     if (this.variation) this.variation.emergencyStopAll();
+    this.mesh.stopAll();
     this.project?.close();
     this.project = undefined;
     this.scanner = undefined;
@@ -300,12 +380,84 @@ export class BelcherSession extends EventEmitter {
     backendName: string;
   } {
     const project = this.requireProject();
+    const backend = project.caKeyBackend;
     return {
       certPem: project.ca.certificatePem,
       fingerprint: project.ca.fingerprint,
-      secureBackend: false, // filled by main via secret store when available
-      backendName: 'project',
+      secureBackend: backend.secure,
+      backendName: backend.name,
     };
+  }
+
+  /** Full certificate lifecycle state, including revocation history and evidence
+   *  that interception is actually working. */
+  getCaStatus(): CaStatus {
+    const project = this.requireProject();
+    const backend = project.caKeyBackend;
+    const certificate = project.ca.status();
+    const revocation = project.ca.revocation;
+    return {
+      ...(certificate ? { certificate } : {}),
+      interceptionEnabled: project.ca.active,
+      ...(revocation.revokedAt !== undefined ? { revokedAt: revocation.revokedAt } : {}),
+      ...(revocation.reason ? { revokedReason: revocation.reason } : {}),
+      secureBackend: backend.secure,
+      backendName: backend.name,
+      history: project.meta.getJson<CaRevocation[]>(CA_HISTORY_KEY) ?? [],
+      observedHttpsExchanges: project.history.countByScheme('https'),
+      installInstructions: caInstallInstructions(),
+    };
+  }
+
+  /**
+   * Issue a fresh CA, replacing the current one. Every client that trusted the
+   * old certificate will reject interception until the new one is installed —
+   * that break is the point of the operation, so it is audited and surfaced,
+   * never silent.
+   */
+  async rotateCa(reason = '', actor: 'user' | 'ai-mesh' = 'user'): Promise<CaStatus> {
+    const project = this.requireProject();
+    const replaced = await project.ca.rotate(reason);
+    if (replaced) this.recordCaEvent(project, replaced);
+    // Apply to connections already open, not just the next CONNECT.
+    this.proxy?.refreshCa();
+    project.audit.append({
+      ts: Date.now(),
+      actor,
+      action: 'ca.rotated',
+      detail: { reason, replacedFingerprint: replaced?.fingerprint ?? null },
+    });
+    const status = this.getCaStatus();
+    this.emit('ca-changed', status);
+    return status;
+  }
+
+  /**
+   * Destroy this project's CA. TLS interception stops — HTTPS CONNECTs are
+   * relayed through unread — until `rotateCa` issues a new one.
+   */
+  async revokeCa(reason = '', actor: 'user' | 'ai-mesh' = 'user'): Promise<CaStatus> {
+    const project = this.requireProject();
+    const revoked = await project.ca.revoke(reason);
+    if (revoked) this.recordCaEvent(project, revoked);
+    // A browser holds an HTTPS tunnel open for minutes; without this, revoking
+    // would leave those tunnels decrypting while the status said otherwise.
+    this.proxy?.refreshCa();
+    project.audit.append({
+      ts: Date.now(),
+      actor,
+      action: 'ca.revoked',
+      detail: { reason, fingerprint: revoked?.fingerprint ?? null },
+    });
+    const status = this.getCaStatus();
+    this.emit('ca-changed', status);
+    return status;
+  }
+
+  private recordCaEvent(project: ProjectStore, record: CaRevocation): void {
+    const history = project.meta.getJson<CaRevocation[]>(CA_HISTORY_KEY) ?? [];
+    history.unshift(record);
+    project.meta.setJson(CA_HISTORY_KEY, history.slice(0, MAX_CA_HISTORY));
   }
 
   // ---- scope ----
@@ -433,6 +585,12 @@ export class BelcherSession extends EventEmitter {
     return this.requireProject().history.count();
   }
 
+  getTargetMap(maxExchanges = 100_000): TargetMap {
+    const project = this.requireProject();
+    const metadata = project.history.siteMapRows(maxExchanges);
+    return buildTargetMap(metadata.rows, project.scope, metadata.total);
+  }
+
   // ---- findings ----
 
   listFindings(includeSuppressed = false): Finding[] {
@@ -514,6 +672,415 @@ export class BelcherSession extends EventEmitter {
     this.interceptor.releaseAll();
     this.emit('emergency-stop');
     this.log.warn('EMERGENCY STOP invoked');
+  }
+
+  // ---- engagement profile, workspace, preflight ----
+
+  getEngagementProfile(): EngagementProfile {
+    const stored = this.requireProject().meta.getJson<Partial<EngagementProfile>>(ENGAGEMENT_KEY);
+    // Merge over defaults so a profile written by an older version (or an
+    // imported project) is never missing a field the enforcement path reads.
+    return { ...defaultEngagementProfile(), ...(stored ?? {}) };
+  }
+
+  /**
+   * Persist the engagement profile. Refuses an invalid one outright: these
+   * values are written into the wire bytes of every generated request, so a
+   * CR/LF in a header value is header injection against a third party, not a
+   * cosmetic problem.
+   */
+  setEngagementProfile(profile: EngagementProfile): void {
+    const project = this.requireProject();
+    const merged: EngagementProfile = { ...defaultEngagementProfile(), ...profile };
+    const problems = validateEngagementProfile(merged);
+    if (problems.length) {
+      throw new Error(`engagement profile rejected: ${problems.join('; ')}`);
+    }
+    const previous = project.meta.getJson<EngagementProfile>(ENGAGEMENT_KEY);
+    project.meta.setJson(ENGAGEMENT_KEY, merged);
+    project.audit.append({
+      ts: Date.now(),
+      actor: 'user',
+      action: 'engagement.profile-updated',
+      detail: {
+        userAgent: merged.userAgent.required,
+        enforce: merged.userAgent.enforce,
+        identityHeaders: merged.identityHeaders.map((h) => h.name),
+        workspaceDir: merged.workspaceDir || '(project directory)',
+        wasEnforced: previous?.userAgent?.enforce ?? false,
+      },
+    });
+    this.emit('engagement-changed', merged);
+  }
+
+  /** The folder the AI may read: the operator's choice, or the project itself. */
+  workspaceRoot(): string {
+    const project = this.requireProject();
+    return this.getEngagementProfile().workspaceDir.trim() || project.directory;
+  }
+
+  listWorkspace(options: { maxEntries?: number; maxDepth?: number } = {}) {
+    return listWorkspace(this.workspaceRoot(), options);
+  }
+
+  readWorkspaceFile(relativePath: string, maxBytes?: number) {
+    return readWorkspaceFile(this.workspaceRoot(), relativePath, maxBytes);
+  }
+
+  searchWorkspace(query: string, options: { maxMatches?: number; maxFiles?: number } = {}) {
+    return searchWorkspace(this.workspaceRoot(), query, options);
+  }
+
+  private async workspaceSummary(): Promise<WorkspaceSummary> {
+    const project = this.requireProject();
+    const root = this.workspaceRoot();
+    const isProjectDir = root === project.directory;
+    try {
+      const listing = await listWorkspace(root);
+      return {
+        root: listing.root,
+        isProjectDir,
+        fileCount: listing.fileCount,
+        totalBytes: listing.totalBytes,
+        notableFiles: listing.notableFiles,
+      };
+    } catch (err) {
+      return {
+        root,
+        isProjectDir,
+        fileCount: 0,
+        totalBytes: 0,
+        notableFiles: [],
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  /**
+   * Compliance measured against traffic that was actually sent, not against
+   * configuration. Proxy-captured traffic is excluded: the browser's own
+   * User-Agent is not ours to control and is never rewritten.
+   */
+  getIdentityCompliance(sampleSize = 100): IdentityCompliance {
+    const project = this.requireProject();
+    const profile = this.getEngagementProfile();
+    const required = profile.userAgent.required.trim();
+    const limit = Math.min(Math.max(Math.trunc(sampleSize), 1), 500);
+    const generated = project.history
+      .query({ limit, sort: 'desc' })
+      .rows.filter((ex) => ex.source === 'repeater' || ex.source === 'variation');
+
+    const observed = new Set<string>();
+    const missingHeaders = new Set<string>();
+    let compliant = 0;
+    for (const exchange of generated) {
+      const check = checkIdentity(exchange.request.headers, profile);
+      if (check.userAgent) observed.add(check.userAgent);
+      for (const name of check.missing) missingHeaders.add(name);
+      if (check.compliant) compliant += 1;
+    }
+    return {
+      applicable: required.length > 0 || profile.identityHeaders.length > 0,
+      required,
+      enforced: identityEnforced(profile),
+      sampled: generated.length,
+      compliant,
+      observedUserAgents: [...observed].slice(0, 10),
+      missingHeaders: [...missingHeaders],
+    };
+  }
+
+  // ---- proof of exploit + hunt memory ----
+
+  /**
+   * Rank in-scope endpoints by which defect class each most likely hides.
+   * Deterministic and offline — it reorders attention and cannot add a target.
+   */
+  rankAttackSurface(limit = 25): SurfaceRanking {
+    return rankAttackSurface(this.getTargetMap(), limit);
+  }
+
+  /**
+   * Grade a control-versus-test differential from two captured exchanges. The
+   * engine reads both and decides; a caller cannot assert a proof into
+   * existence, which is what keeps a confident hypothesis from becoming a
+   * reported finding on its own.
+   */
+  async proveFinding(
+    controlExchangeId: string,
+    testExchangeId: string,
+    claim: string,
+  ): Promise<ProofResult> {
+    const control = await this.getExchangeDetail(controlExchangeId);
+    if (!control) throw new Error(`control exchange ${controlExchangeId} not found`);
+    const test = await this.getExchangeDetail(testExchangeId);
+    if (!test) throw new Error(`test exchange ${testExchangeId} not found`);
+    const result = proveDifferential(control, test, claim);
+    this.project?.audit.append({
+      ts: Date.now(),
+      actor: 'ai-mesh',
+      action: `proof.${result.outcome}`,
+      target: test.request.url,
+      detail: { claim, control: controlExchangeId, test: testExchangeId },
+    });
+    return result;
+  }
+
+  /** True when a cross-engagement hunt memory is configured. */
+  get huntMemoryEnabled(): boolean {
+    return this.huntMemory !== undefined;
+  }
+
+  /** Record what a hypothesis turned out to be, for future hunts to read. */
+  async recordHuntOutcome(input: HuntOutcomeInput): Promise<HuntOutcomeRecord | undefined> {
+    if (!this.huntMemory) return undefined;
+    const program = input.program || this.engagementProfileOrUndefined()?.program || '';
+    return this.huntMemory.record({ ...input, program });
+  }
+
+  /**
+   * Merge what previous hunts learned about this shape and class.
+   *
+   * Scoped to the open engagement, and it FAILS CLOSED. Recall is read into an
+   * AI context that is egressed to a model provider, so an unscoped query would
+   * carry one client's notes and route shapes into another client's run — and
+   * "recall everything" is exactly the query the recon prompt naturally makes.
+   *
+   * The label falls back through the engagement profile, the project's recorded
+   * authorization reference, and finally the project name, because a freshly
+   * created project has an empty profile and an earlier version silently
+   * degraded that case into an unfiltered cross-client read. If no label can be
+   * derived at all, nothing is recalled rather than everything.
+   *
+   * Cross-program recall is available, but only when the OPERATOR asks for it
+   * (`allPrograms`) — never by a caller supplying a `program` string, since the
+   * model that calls this reads untrusted target content.
+   */
+  async recallHuntHistory(
+    query: { host?: string; pathShape?: string; klass?: string } = {},
+    options: { allPrograms?: boolean } = {},
+  ): Promise<HuntRecallResult> {
+    if (!this.huntMemory) {
+      return {
+        entries: [],
+        recordsConsidered: 0,
+        notes: ['Hunt memory is not configured, so no prior outcomes are available.'],
+      };
+    }
+    if (options.allPrograms) {
+      const result = await this.huntMemory.recall(query);
+      result.notes.push(
+        'Recalled across ALL engagements at the operator’s request. Hostnames from other programs are withheld.',
+      );
+      return result;
+    }
+    const program = this.currentProgramLabel();
+    if (!program) {
+      return {
+        entries: [],
+        recordsConsidered: 0,
+        notes: [
+          'No prior hunts were recalled: this engagement has no program label, and hunt memory is shared across engagements, so an unscoped read could disclose another client’s work. Set the program name or authorization reference in the Engagement view to use hunt memory here.',
+        ],
+      };
+    }
+    const result = await this.huntMemory.recall({ ...query, program });
+    result.notes.push(`Scoped to the "${program}" engagement.`);
+    return result;
+  }
+
+  /**
+   * Read the engagement folder and propose scope entries, with the document
+   * line each came from. Proposals only — nothing is written to scope, because
+   * a document is a claim about authorization, not authorization itself.
+   */
+  async proposeScopeFromWorkspace(): Promise<ScopeProposal> {
+    const listing = await this.listWorkspace();
+    const readable = listing.entries.filter((e) => e.kind === 'file' && e.readable);
+    // Read the likely policy documents first, then anything else, bounded.
+    const ordered = [
+      ...readable.filter((e) => listing.notableFiles.includes(e.path)),
+      ...readable.filter((e) => !listing.notableFiles.includes(e.path)),
+    ].slice(0, 60);
+
+    const sources: ProposalSource[] = [];
+    for (const entry of ordered) {
+      try {
+        const file = await this.readWorkspaceFile(entry.path);
+        sources.push({ path: file.path, content: file.content });
+      } catch {
+        continue; // unreadable/binary: skip rather than fail the whole proposal
+      }
+    }
+    return proposeScope(sources);
+  }
+
+  /** Erase the cross-engagement hunt memory. */
+  async clearHuntMemory(): Promise<void> {
+    await this.huntMemory?.clear();
+    this.project?.audit.append({
+      ts: Date.now(),
+      actor: 'user',
+      action: 'hunt-memory.cleared',
+    });
+  }
+
+  /**
+   * A stable label identifying THIS engagement, for scoping hunt memory.
+   * Falls back to the project's own identity so a project whose engagement
+   * profile was never filled in still gets its own scope rather than none.
+   */
+  private currentProgramLabel(): string | undefined {
+    const project = this.project;
+    if (!project) return undefined;
+    const profile = this.getEngagementProfile();
+    return (
+      profile.program.trim() ||
+      profile.authorizationRef.trim() ||
+      project.info?.authorizationRef?.trim() ||
+      project.info?.name?.trim() ||
+      undefined
+    );
+  }
+
+  /** The single readiness check the mesh runs before it plans anything. */
+  async getPreflight(): Promise<PreflightReport> {
+    const project = this.project;
+    if (!project) {
+      return buildPreflight({
+        profile: defaultEngagementProfile(),
+        scope: emptyScope(),
+        ca: {
+          interceptionEnabled: false,
+          secureBackend: false,
+          backendName: 'none',
+          history: [],
+          observedHttpsExchanges: 0,
+          installInstructions: caInstallInstructions(),
+        },
+        identity: {
+          applicable: false,
+          required: '',
+          enforced: false,
+          sampled: 0,
+          compliant: 0,
+          observedUserAgents: [],
+          missingHeaders: [],
+        },
+        proxy: this.getProxyStatus(),
+        workspace: { root: '', isProjectDir: false, fileCount: 0, totalBytes: 0, notableFiles: [] },
+        history: { exchanges: 0, findings: 0 },
+      });
+    }
+    const info = project.info;
+    // Only read the folder for proposals when scope is actually empty — that is
+    // the one case where the answer changes what the operator should do next.
+    let proposedScopeHosts: string[] = [];
+    if (project.scope.include.filter((r) => r.enabled !== false).length === 0) {
+      try {
+        proposedScopeHosts = (await this.proposeScopeFromWorkspace()).include.map((c) => c.host);
+      } catch {
+        proposedScopeHosts = [];
+      }
+    }
+    return buildPreflight({
+      ...(proposedScopeHosts.length ? { proposedScopeHosts } : {}),
+      project: {
+        name: info?.name ?? '(unnamed)',
+        directory: project.directory,
+        ...(info?.authorizationRef ? { authorizationRef: info.authorizationRef } : {}),
+        encryptedAtRest: project.encryptedAtRest,
+      },
+      profile: this.getEngagementProfile(),
+      scope: project.scope,
+      ca: this.getCaStatus(),
+      identity: this.getIdentityCompliance(),
+      proxy: this.getProxyStatus(),
+      workspace: await this.workspaceSummary(),
+      history: {
+        exchanges: project.history.count(),
+        findings: project.findings.list({ includeSuppressed: false }).length,
+      },
+    });
+  }
+
+  // ---- ai mesh ----
+
+  getAiConfig(): AiConfig {
+    return normalizeAiConfig(this.requireProject().meta.getJson<Partial<AiConfig>>('project.ai'));
+  }
+
+  setAiConfig(config: AiConfig): void {
+    const project = this.requireProject();
+    const prev = project.meta.getJson<AiConfig>('project.ai');
+    project.meta.setJson('project.ai', config);
+    // Egress toggles are security-relevant — always audited.
+    if (!prev || prev.egressAcknowledged !== config.egressAcknowledged) {
+      project.audit.append({
+        ts: Date.now(),
+        actor: 'user',
+        action: config.egressAcknowledged ? 'ai.egress-enabled' : 'ai.egress-disabled',
+      });
+    }
+  }
+
+  async setAiApiKey(key: string): Promise<void> {
+    if (!this.aiSecretStore) throw new Error('No secret store is configured for AI keys.');
+    const trimmed = key.trim();
+    if (!trimmed) throw new Error('API key is empty.');
+    await this.aiSecretStore.set(TacnocSession.AI_KEY, trimmed);
+  }
+
+  /** Report only WHETHER a key is present and how it is held — never the key itself. */
+  async getAiKeyStatus(): Promise<AiKeyStatus> {
+    if (!this.aiSecretStore) return { configured: false, secure: false, backendName: 'none' };
+    let configured = false;
+    try {
+      configured = (await this.aiSecretStore.get(TacnocSession.AI_KEY)) !== null;
+    } catch {
+      // Present but not decryptable on this OS user/machine — still "configured".
+      configured = true;
+    }
+    return {
+      configured,
+      secure: this.aiSecretStore.isSecure(),
+      backendName: this.aiSecretStore.backendName(),
+    };
+  }
+
+  async clearAiApiKey(): Promise<void> {
+    if (this.aiSecretStore) await this.aiSecretStore.delete(TacnocSession.AI_KEY);
+  }
+
+  /** Start a closed-loop mesh run. The API key is read here, main-side, and never leaves. */
+  async startMeshRun(plan: MeshRunPlan): Promise<MeshRunProgress> {
+    this.requireProject();
+    if (!this.aiSecretStore) throw new Error('No secret store is configured for AI keys.');
+    const key = await this.aiSecretStore.get(TacnocSession.AI_KEY);
+    if (key === null) {
+      throw new Error('No Anthropic API key configured. Add one in AI settings first.');
+    }
+    const config = this.getAiConfig();
+    const provider = new AnthropicProvider({
+      apiKey: key,
+      ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+    });
+    return this.mesh.start(plan, {
+      provider,
+      config,
+      tools: buildTools(this, {
+        workspaceAccess: config.workspaceAccess,
+        allowCertOps: config.allowCertOps,
+      }),
+    });
+  }
+
+  stopMeshRun(id: string): void {
+    this.mesh.stop(id);
+  }
+
+  getMeshRun(id: string): MeshRun | undefined {
+    return this.mesh.get(id);
   }
 
   // ---- audit ----

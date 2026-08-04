@@ -1,5 +1,5 @@
 /**
- * GreyNOC Belcher Extension SDK — public API surface (v1).
+ * TACNOC Extension SDK — public API surface (v1).
  *
  * The API is CAPABILITY-BASED: an extension declares the permissions it needs in
  * its manifest, the user approves them, and the host injects an API object that
@@ -102,10 +102,10 @@ export interface ExtensionContextMenuAction {
 }
 
 /**
- * The API object injected into an extension's `activate(belcher)` function.
+ * The API object injected into an extension's `activate(tacnoc)` function.
  * Only methods for granted permissions are present.
  */
-export interface BelcherExtensionApi {
+export interface TacnocExtensionApi {
   readonly version: string;
   readonly manifest: Readonly<ExtensionManifest>;
   /** Structured, redacted log line (local only). Always available. */
@@ -121,5 +121,5 @@ export interface BelcherExtensionApi {
 
 /** Shape of an extension module: it exports an `activate` function. */
 export interface ExtensionModule {
-  activate: (belcher: BelcherExtensionApi) => void;
+  activate: (tacnoc: TacnocExtensionApi) => void;
 }

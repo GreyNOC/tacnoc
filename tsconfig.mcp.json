@@ -1,0 +1,42 @@
+{
+  "$comment": [
+    "Emit config for the standalone MCP server (src/mcp). The root tsconfig is",
+    "typecheck-only (noEmit) because electron-vite does the app bundling — but the",
+    "MCP server is spawned by an external client as a plain Node process, so it",
+    "needs real emitted ESM.",
+    "",
+    "moduleResolution is NodeNext here (not Bundler) so the output resolves under",
+    "Node's own ESM rules. That works because every relative import in the engine",
+    "already carries an explicit .js extension.",
+    "",
+    "`include` lists only the MCP entry: tsc pulls in the engine and shared modules",
+    "it actually imports, and nothing else. If this ever starts emitting renderer",
+    "or storage code, an import crept in that breaks the offline/pure guarantee in",
+    "src/mcp/tools.ts — treat that as a build failure, not a surprise."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023"],
+    "types": ["node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": false,
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+
+    "rootDir": "src",
+    "outDir": "out/mcpsrv",
+    "noEmit": false,
+    "declaration": false,
+    "sourceMap": false,
+    "removeComments": false
+  },
+  "include": ["src/mcp/**/*.ts"]
+}

@@ -57,6 +57,31 @@ interface ExchangeRow {
   error: string | null;
 }
 
+/** Cleartext operational metadata used to build the target map without loading bodies. */
+export interface SiteMapHistoryRow {
+  id: string;
+  createdAt: number;
+  scheme: Scheme;
+  host: string;
+  port: number;
+  method: string;
+  url: string;
+  statusCode: number | null;
+  mime: string | null;
+}
+
+interface SiteMapDbRow {
+  id: string;
+  created_at: number;
+  scheme: string;
+  host: string;
+  port: number;
+  method: string;
+  url: string;
+  status_code: number | null;
+  mime: string | null;
+}
+
 const INSERT_SQL = `
   INSERT INTO exchanges (
     id, created_at, source, scheme, host, port, in_scope, automated, job_id,
@@ -149,8 +174,49 @@ export class HistoryRepo {
     return row?.n ?? 0;
   }
 
+  /**
+   * Exchanges captured over a given scheme. Preflight uses the https count as
+   * evidence that TLS interception genuinely works — configuration alone cannot
+   * tell you whether the test browser actually trusts the CA.
+   */
+  countByScheme(scheme: string): number {
+    const row = this.db.get<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM exchanges WHERE scheme = ?',
+      scheme,
+    );
+    return row?.n ?? 0;
+  }
+
   clear(): void {
     this.db.run('DELETE FROM exchanges');
+  }
+
+  /**
+   * Read only the metadata needed by the site map. The newest rows are kept
+   * when a very large project exceeds the bound, avoiding body/header decrypts.
+   */
+  siteMapRows(maxExchanges = 100_000): { total: number; rows: SiteMapHistoryRow[] } {
+    const limit = Math.min(Math.max(Math.trunc(maxExchanges), 1), 100_000);
+    const total = this.count();
+    const rows = this.db.all<SiteMapDbRow>(
+      `SELECT id, created_at, scheme, host, port, method, url, status_code, mime
+       FROM exchanges ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+      limit,
+    );
+    return {
+      total,
+      rows: rows.map((row) => ({
+        id: row.id,
+        createdAt: row.created_at,
+        scheme: row.scheme as Scheme,
+        host: row.host,
+        port: row.port,
+        method: row.method,
+        url: row.url,
+        statusCode: row.status_code,
+        mime: row.mime,
+      })),
+    };
   }
 
   query(filter: HistoryFilter): HistoryPage<HttpExchange> {

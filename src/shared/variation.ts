@@ -33,6 +33,15 @@ export interface VariationBaseRequest {
   raw: string;
 }
 
+export interface ResponseExtractor {
+  /** Column label shown in results. */
+  name: string;
+  /** JavaScript-compatible regular expression, evaluated against a bounded response prefix. */
+  pattern: string;
+  /** Capture group to return. Defaults to group 1, falling back to the full match. */
+  group?: number;
+}
+
 export interface VariationPlan {
   name: string;
   base: VariationBaseRequest;
@@ -41,6 +50,8 @@ export interface VariationPlan {
   limits: AutomationLimits;
   /** Optional regex strings extracted from responses and shown as markers. */
   responseMarkers?: string[];
+  /** Named response regex extractions (Intruder-style grep extract). */
+  responseExtractors?: ResponseExtractor[];
 }
 
 export type JobStatus = 'created' | 'running' | 'paused' | 'completed' | 'stopped' | 'error';
@@ -51,12 +62,17 @@ export interface VariationResultRow {
   requestId: string;
   status: number;
   responseLength: number;
+  responseWords?: number;
+  responseLines?: number;
+  responseHash?: string;
+  responseTruncated?: boolean;
   durationMs: number;
   ttfbMs: number;
   inScope: boolean;
   skipped?: boolean;
   error?: string;
   markerHits?: string[];
+  extracted?: Record<string, string>;
 }
 
 export interface JobProgress {

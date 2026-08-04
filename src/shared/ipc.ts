@@ -1,7 +1,7 @@
 /** IPC channel names and event payload types shared by main, preload, renderer. */
 
-export const IPC_INVOKE = 'belcher:invoke';
-export const IPC_EVENT = 'belcher:event';
+export const IPC_INVOKE = 'tacnoc:invoke';
+export const IPC_EVENT = 'tacnoc:event';
 
 /** Events pushed from main → renderer. */
 export type AppEvent =
@@ -17,7 +17,11 @@ export type AppEvent =
   | { type: 'scope-changed'; payload: import('./scope.js').ScopeConfig }
   | { type: 'emergency-stop'; payload: null }
   | { type: 'ws-message'; payload: { exchangeId: string; direction: string; kind: string } }
-  | { type: 'project-open'; payload: import('./project.js').ProjectInfo | undefined };
+  | { type: 'project-open'; payload: import('./project.js').ProjectInfo | undefined }
+  | { type: 'mesh-step'; payload: import('./ai.js').MeshStep }
+  | { type: 'mesh-progress'; payload: import('./ai.js').MeshRunProgress }
+  | { type: 'ca-changed'; payload: import('./engagement.js').CaStatus }
+  | { type: 'engagement-changed'; payload: import('./engagement.js').EngagementProfile };
 
 export interface ProxyStatusDto {
   running: boolean;
@@ -34,7 +38,11 @@ export interface CaInfoDto {
   installInstructions: string;
 }
 
-/** The set of invokable method names (documented; enforced in main dispatch). */
+/**
+ * The set of invokable method names. `registerIpc` asserts at startup that this
+ * list and the main-process `handlers` table are in exact parity, so a method
+ * cannot be exposed here without an implementation (or vice versa).
+ */
 export const INVOKE_METHODS = [
   'pickDirectory',
   'createProject',
@@ -48,6 +56,19 @@ export const INVOKE_METHODS = [
   'getProxyStatus',
   'getCaInfo',
   'saveCaCertificate',
+  'getCaStatus',
+  'rotateCa',
+  'revokeCa',
+  'getEngagementProfile',
+  'setEngagementProfile',
+  'getPreflight',
+  'listWorkspace',
+  'readWorkspaceFile',
+  'searchWorkspace',
+  'pickWorkspaceDirectory',
+  'recallHuntHistory',
+  'clearHuntMemory',
+  'proposeScopeFromWorkspace',
   'getScope',
   'setScope',
   'getConfig',
@@ -64,6 +85,7 @@ export const INVOKE_METHODS = [
   'updateNotesTags',
   'clearHistory',
   'historyCount',
+  'getTargetMap',
   'listFindings',
   'setFindingSuppressed',
   'addSuppression',
@@ -81,6 +103,7 @@ export const INVOKE_METHODS = [
   'diffText',
   'diffJson',
   'diffBytes',
+  'analyzeTokenSamples',
   'createVariationJob',
   'runVariationJob',
   'pauseVariationJob',
@@ -92,6 +115,14 @@ export const INVOKE_METHODS = [
   'listAudit',
   'listExtensions',
   'loadExampleExtension',
+  'getAiConfig',
+  'setAiConfig',
+  'setAiApiKey',
+  'getAiKeyStatus',
+  'clearAiApiKey',
+  'startMeshRun',
+  'stopMeshRun',
+  'getMeshRun',
 ] as const;
 
 export type InvokeMethod = (typeof INVOKE_METHODS)[number];

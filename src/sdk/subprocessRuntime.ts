@@ -76,7 +76,7 @@ function load(manifest, source, granted) {
   const sandbox = {
     module: { exports: {} },
     exports: {},
-    belcher: api,
+    tacnoc: api,
     console: {
       log: (...a) => post({ type: 'log', level: 'info', msg: '[' + manifest.id + '] ' + a.join(' ') }),
       warn: (...a) => post({ type: 'log', level: 'warn', msg: '[' + manifest.id + '] ' + a.join(' ') }),
@@ -88,10 +88,10 @@ function load(manifest, source, granted) {
   // (defense in depth; the host-realm .constructor path is documented as out of
   // scope for the vm and mitigated by the process boundary + redaction).
   const context = vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } });
-  new vm.Script(source, { filename: 'belcher-ext:' + manifest.id }).runInContext(context, { timeout: 2000 });
+  new vm.Script(source, { filename: 'tacnoc-ext:' + manifest.id }).runInContext(context, { timeout: 2000 });
   const mod = sandbox.module.exports;
   const activate = (mod && mod.activate) || sandbox.exports.activate;
-  if (typeof activate !== 'function') throw new Error('extension ' + manifest.id + ' does not export an activate(belcher) function');
+  if (typeof activate !== 'function') throw new Error('extension ' + manifest.id + ' does not export an activate(tacnoc) function');
   // Snapshot the registries so a failed activate rolls back ONLY the delta it
   // added (not another extension's live registrations that share an id).
   const checksLen = checks.length;

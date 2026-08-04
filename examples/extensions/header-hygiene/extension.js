@@ -1,20 +1,20 @@
 /**
- * Header Hygiene — a harmless example GreyNOC Belcher extension.
+ * Header Hygiene — a harmless example TACNOC extension.
  *
- * Demonstrates the capability-based SDK. It uses ONLY the injected `belcher`
+ * Demonstrates the capability-based SDK. It uses ONLY the injected `tacnoc`
  * API object — no require(), no filesystem, no network. Each capability is used
  * defensively (guarded by a feature check) so the extension still loads if the
  * user grants a subset of permissions.
  *
- * Contract: an extension is a CommonJS module that exports `activate(belcher)`.
+ * Contract: an extension is a CommonJS module that exports `activate(tacnoc)`.
  */
 
-function activate(belcher) {
-  belcher.log('header-hygiene activated (sdk ' + belcher.version + ')');
+function activate(tacnoc) {
+  tacnoc.log('header-hygiene activated (sdk ' + tacnoc.version + ')');
 
   // 1) Passive check: flag responses that expose an X-Debug header.
-  if (belcher.registerScannerCheck) {
-    belcher.registerScannerCheck({
+  if (tacnoc.registerScannerCheck) {
+    tacnoc.registerScannerCheck({
       module: 'header-hygiene',
       version: '1.0.0',
       appliesTo: function (ex) {
@@ -44,8 +44,8 @@ function activate(belcher) {
   }
 
   // 2) Data transform: ROT13 (purely illustrative).
-  if (belcher.registerTransform) {
-    belcher.registerTransform({
+  if (tacnoc.registerTransform) {
+    tacnoc.registerTransform({
       id: 'rot13',
       label: 'ROT13 (example)',
       category: 'encode',
@@ -60,16 +60,16 @@ function activate(belcher) {
 
   // 3) Sanitized traffic counter.
   var count = 0;
-  if (belcher.onTraffic) {
-    belcher.onTraffic(function () {
+  if (tacnoc.onTraffic) {
+    tacnoc.onTraffic(function () {
       count += 1;
-      if (count % 25 === 0) belcher.log('observed ' + count + ' exchanges');
+      if (count % 25 === 0) tacnoc.log('observed ' + count + ' exchanges');
     });
   }
 
   // 4) Read-only editor tab (returns PLAIN TEXT; never executed as HTML).
-  if (belcher.registerEditorTab) {
-    belcher.registerEditorTab({
+  if (tacnoc.registerEditorTab) {
+    tacnoc.registerEditorTab({
       id: 'header-summary',
       label: 'Header Summary',
       render: function (event) {

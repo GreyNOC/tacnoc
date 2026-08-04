@@ -13,6 +13,13 @@ runner's Node 24, but the *shipped* app runs on Electron's Node — so the app
 would crash the moment a project's database was opened. This is exactly the
 "green tests that don't work when exercised" failure the house rules warn about.
 
+> **Update (2026-07-18, v0.3.0):** the app has since moved to Electron 43 (the
+> Node 22.x line, which *does* include `node:sqlite`, still behind a flag). The
+> decision below is unchanged: `node-sqlite3-wasm` remains the single backend so
+> the store is version-independent and identical across the test runner and the
+> shipped runtime. The Electron-33/Node-20.18 detail above is the original,
+> as-of-decision context.
+
 ## Decision
 
 Use **`node-sqlite3-wasm`** — a pure-WebAssembly SQLite build — as the single

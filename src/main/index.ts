@@ -12,7 +12,7 @@
 import { app, BrowserWindow, shell } from 'electron';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BelcherSession } from '../engine/session.js';
+import { TacnocSession } from '../engine/session.js';
 import { ElectronSecretStore } from './electronSecretStore.js';
 import { registerIpc } from './ipc.js';
 
@@ -20,9 +20,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let mainWindow: BrowserWindow | null = null;
 
-const session = new BelcherSession({
+const session = new TacnocSession({
   appVersion: app.getVersion(),
   secretStoreFactory: (dir) => new ElectronSecretStore(dir),
+  // The AI provider key is app-global, not per-project: held in OS secure
+  // storage under userData so it never travels with a shared project folder and
+  // never crosses the contextBridge to the renderer.
+  aiSecretStore: new ElectronSecretStore(path.join(app.getPath('userData'), 'ai-secrets')),
+  // Hunt memory is app-global for the same reason it is useful at all: what one
+  // engagement settled should be available to the next, including in a different
+  // project. Local only — it never leaves the machine.
+  huntMemoryDir: path.join(app.getPath('userData'), 'hunt-memory'),
 });
 
 function createWindow(): void {
@@ -32,7 +40,7 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 600,
     backgroundColor: '#0d1117',
-    title: 'GreyNOC Belcher',
+    title: 'TACNOC',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,

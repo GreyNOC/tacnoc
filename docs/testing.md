@@ -62,8 +62,11 @@ uses a throwaway self-signed cert (`test/server/selfSignedCert.ts`).
 
 The storage backend is WASM SQLite (`node-sqlite3-wasm`), which we verified runs
 **identically** under the test runner's Node and under **Electron's bundled
-Node** (Electron 33 ships Node 20.18, which lacks `node:sqlite`). This is why the
-tests verify what actually ships — see [adr/0003-sqlite-wasm-backend.md](adr/0003-sqlite-wasm-backend.md).
+Node**. (The original driver for a WASM backend was that the then-current
+Electron 33 shipped Node 20.18, which lacks `node:sqlite`; the app now pins
+Electron 43 on the Node 22.x line, and WASM SQLite remains the backend so the
+tests keep verifying exactly what ships.) See
+[adr/0003-sqlite-wasm-backend.md](adr/0003-sqlite-wasm-backend.md).
 
 ## Writing tests
 

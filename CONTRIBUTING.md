@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping build GreyNOC Belcher. This project holds a high bar:
+Thanks for helping build TACNOC. This project holds a high bar:
 **reproducible or it didn't happen**, and safety controls are features, not
 disclaimers.
 

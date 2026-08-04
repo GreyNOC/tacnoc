@@ -1,8 +1,9 @@
-# GreyNOC Belcher
+# TACNOC
 
 **An extensible web-application security research suite for _authorized_ testing.**
 
-GreyNOC Belcher is an original, local-first intercepting-proxy workbench: capture
+TACNOC is an original, local-first intercepting-proxy workbench (with one
+opt-in exception — see the AI mesh below): capture
 and inspect HTTP/HTTPS traffic, intercept and edit messages, replay requests,
 transform data, run passive security checks, and perform tightly-controlled,
 rate-limited request variation against destinations you are explicitly authorized
@@ -31,8 +32,16 @@ no proprietary code, UI, branding, or assets.
   generated locally and the CA private key is stored in OS secure storage. The
   app never modifies your OS trust store; installing the CA is an explicit,
   warned, manual step. See [docs/certificate-management.md](docs/certificate-management.md).
-- **No telemetry** — captured traffic is never sent to analytics, telemetry, or
-  external AI services. There is no network sink for logs.
+- **No telemetry** — no analytics, no usage reporting, no update check, and no
+  network sink for logs. The tool never phones home.
+- **One opt-in outbound path: the AI mesh.** TACNOC can drive an LLM to help
+  work an engagement. When you enable it, **captured request/response content —
+  including any secrets, cookies, and PII — and the documents in your engagement
+  folder are sent to the configured model provider.** It is off by default,
+  refuses to start without a per-project egress acknowledgement, writes that
+  acknowledgement to the audit log, and can redact secrets first. Leave it off
+  and everything stays local. See
+  [docs/engagement-and-hunting.md](docs/engagement-and-hunting.md).
 
 The tool deliberately contains **no** stealth/persistence, malware delivery,
 phishing, credential-stuffing, denial-of-service, destructive payload,
@@ -49,7 +58,7 @@ ADR 0003).
 
 ## Requirements
 
-- Node.js ≥ 20.11 and npm (developed against Node 24).
+- Node.js ≥ 22.12 and npm (developed against Node 24).
 - Windows, macOS, or Linux.
 - No native build toolchain required (SQLite is WASM; the CA is pure JS).
 
@@ -100,9 +109,9 @@ npm run checksums      # write dist/SHA256SUMS-<os>.txt
 Packaging and the release runbook (SBOM, checksums, signing decision, CI) are in
 [RELEASE.md](RELEASE.md); changes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
-## What works today (first delivery)
+## What works today (v0.4.0)
 
-Implemented and covered by the automated suite (138 unit/integration tests plus
+Implemented and covered by the automated suite (259 unit/integration tests plus
 a real-Electron Playwright E2E suite: a smoke check, a full click-through, and a
 packaged-artifact verification). Run `npm test` for the current count.
 
@@ -117,6 +126,9 @@ packaged-artifact verification). Run `npm test` for the current count.
 - Interception: edit/forward/drop for requests and responses (HTTP/1.1 + HTTP/2).
 - History in SQLite with search/filter; raw/headers/JSON/hex message views with
   sensitive-value masking.
+- **Target map** derived from bounded capture metadata: origins, normalized
+  endpoints, methods, statuses, MIME types, query parameters, current scope,
+  counts, latest-exchange inspection, and direct Repeater handoff.
 - **Encryption at rest** — captured bodies (blob store + inline) and headers are
   AES-256-GCM encrypted under a per-project key held in OS secure storage.
 - Encoder/decoder, hashes, gzip, timestamps, JWT inspection (decode-only).
@@ -125,7 +137,12 @@ packaged-artifact verification). Run `npm test` for the current count.
 - Modular passive scanner (11 built-in checks) with redacted evidence and
   false-positive suppression.
 - Controlled, scope-gated, rate-limited request variation with pause/resume,
-  emergency stop, and an audit trail.
+  emergency stop, response grep/named extraction, hashes and size/word/line
+  triage, hard request/response bounds, and an audit trail.
+- **Sequencer** token analysis for text, hex, Base64, and Base64url samples with
+  collision, entropy, bit-bias, correlation, compression, and per-position
+  screening. Assessments are intentionally cautious and never claim that a
+  generator is cryptographically secure.
 - Versioned project export/import (including captured WebSocket frames);
   close/reopen without data loss.
 - **Settings** screen for the engine limits, capture toggles, and redaction
@@ -133,8 +150,25 @@ packaged-artifact verification). Run `npm test` for the current count.
   notes/tags, and suppression-rule management are all reachable from the UI.
 - Capability-based extension SDK; extensions run in an **isolated child process**
   with an RPC bridge (plus an inner `vm`), with a harmless example extension.
+- **Engagement layer** — a per-project engagement profile (program, handle,
+  authorization reference, a program-mandated `User-Agent` and identity headers)
+  that the Repeater and Variation engine actually enforce on generated traffic;
+  a graded **preflight** readiness report; a sandboxed, read-only **engagement
+  folder** the AI reads before planning; and issue/revoke of the interception CA
+  with an audited history. See
+  [docs/engagement-and-hunting.md](docs/engagement-and-hunting.md).
+- **Proof-of-exploit gate** — a finding is graded by the engine from a control
+  and a test exchange (`confirmed` / `refuted` / `inconclusive`), so the AI
+  cannot mark its own work proven. Paired with a local, redacted **hunt memory**
+  keyed by path shape, so what one engagement settled carries into the next, and
+  a deterministic **attack-surface ranking** that reorders where to look.
 
 ### Known limitations
+
+- The scanner is **passive**. Active crawling/scanning, Collaborator/OAST,
+  proxy match/replace, an embedded browser, session macros, and editable
+  WebSocket replay are not implemented. See the explicit
+  [capability matrix](docs/capability-matrix.md).
 
 - **HTTP/3 / QUIC interception is NOT implemented.** HTTP/2 *is* intercepted (via
   ALPN `h2`, translated to HTTP/1.1 upstream); h3 is not, and clients typically
@@ -157,10 +191,12 @@ packaged-artifact verification). Run `npm test` for the current count.
 - [SECURITY.md](SECURITY.md) · [THREAT_MODEL.md](THREAT_MODEL.md) ·
   [ARCHITECTURE.md](ARCHITECTURE.md) · [CONTRIBUTING.md](CONTRIBUTING.md)
 - [docs/authorization-and-scope.md](docs/authorization-and-scope.md)
+- [docs/engagement-and-hunting.md](docs/engagement-and-hunting.md)
 - [docs/certificate-management.md](docs/certificate-management.md)
 - [docs/project-format.md](docs/project-format.md)
 - [docs/extension-sdk.md](docs/extension-sdk.md)
 - [docs/testing.md](docs/testing.md)
+- [docs/capability-matrix.md](docs/capability-matrix.md)
 - [docs/PLAN.md](docs/PLAN.md) · [docs/adr/](docs/adr/)
 
 ## License

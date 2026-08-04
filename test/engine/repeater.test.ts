@@ -32,7 +32,7 @@ const OPTS: RepeaterOptions = {
 
 beforeAll(async () => {
   server = await startTestServer();
-  dir = path.join(os.tmpdir(), `belcher-rep-${crypto.randomBytes(6).toString('hex')}`);
+  dir = path.join(os.tmpdir(), `tacnoc-rep-${crypto.randomBytes(6).toString('hex')}`);
   blobs = new BlobStore(path.join(dir, 'blobs'));
   repeater = new Repeater({
     blobStore: blobs,

@@ -3,20 +3,20 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { promises as fs } from 'node:fs';
 import * as crypto from 'node:crypto';
-import { BelcherSession } from '../../src/engine/session.js';
+import { TacnocSession } from '../../src/engine/session.js';
 import { InMemorySecretStore } from '../../src/engine/ca/secretStore.js';
 import { startTestServer, type TestServerHandle } from '../server/testServer.js';
 import { httpsThroughProxy } from '../support/proxyClient.js';
 
 let server: TestServerHandle;
-let session: BelcherSession;
+let session: TacnocSession;
 let dir: string;
 
 beforeAll(async () => {
   server = await startTestServer();
-  dir = path.join(os.tmpdir(), `belcher-session-${crypto.randomBytes(6).toString('hex')}`);
-  session = new BelcherSession({ secretStoreFactory: () => new InMemorySecretStore() });
-  await session.createProject(path.join(dir, 'p.gnbproj'), 'session-test');
+  dir = path.join(os.tmpdir(), `tacnoc-session-${crypto.randomBytes(6).toString('hex')}`);
+  session = new TacnocSession({ secretStoreFactory: () => new InMemorySecretStore() });
+  await session.createProject(path.join(dir, 'p.tacnocproj'), 'session-test');
 });
 
 afterAll(async () => {
@@ -30,7 +30,7 @@ async function waitFor(pred: () => boolean, ms = 3000): Promise<void> {
   while (!pred() && Date.now() - start < ms) await new Promise((r) => setTimeout(r, 20));
 }
 
-describe('BelcherSession end-to-end', () => {
+describe('TacnocSession end-to-end', () => {
   it('starts a loopback proxy, captures HTTPS, persists history, and scans', async () => {
     const status = await session.startProxy('127.0.0.1', 0);
     expect(status.running).toBe(true);
