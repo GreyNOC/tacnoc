@@ -6,7 +6,29 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed — a project created by one build could not be opened by another
+
+- **The app had no stable identity, and that made projects unopenable.** Electron
+  derives the userData directory from the app name, which it resolved from however
+  the process was started: the package name under `npm run dev`, "Electron" under a
+  bare `electron out/main/index.js`, and the electron-builder productName when
+  packaged. `safeStorage` keeps its master key in `<userData>/Local State`, so each
+  identity sealed project secrets under a different key — a project created in dev
+  simply could not be opened by the release build. In a tool whose value is the
+  engagement evidence it retains, that is a data-availability defect. The main
+  process now pins `app.setName('TACNOC')` before anything reads userData.
+- **The error blamed the wrong thing.** It said the project was "sealed by a
+  different OS user account or machine", sending the operator to look at their
+  Windows profile for a problem that was really the launcher. It now names the
+  running identity and its userData directory, and says to check for sibling
+  directories first.
+- **Added `scripts/reseal-project-secrets.mjs`** to migrate projects already in
+  that state. It copies the secret store aside, decrypts under the old identity and
+  re-encrypts under the current one in two Electron processes, and verifies every
+  secret round-trips before it is done — restoring the original if not. The
+  plaintext crosses a one-shot loopback socket, never a temp file or an environment
+  variable: it is a CA private key, and neither the disk nor the process table is an
+  acceptable place to park one.
 
 ## [0.4.2] — 2026-08-04
 

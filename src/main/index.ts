@@ -18,6 +18,27 @@ import { registerIpc } from './ipc.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Pin the application identity before anything reads `userData`.
+ *
+ * Electron derives the app name — and therefore the userData directory — from
+ * however the process was started. `npm run dev` resolved it to the package name,
+ * a bare `electron out/main/index.js` resolved it to "Electron", and the packaged
+ * build to the electron-builder productName. Three identities on one machine.
+ *
+ * That is not cosmetic. `safeStorage` keeps its master key in `<userData>/Local
+ * State`, so each identity seals project secrets under a DIFFERENT key: a project
+ * created in dev could not be opened by the release build at all, and the failure
+ * surfaced as "sealed by a different OS user account or machine" — which sent the
+ * operator looking at their Windows profile for a problem that was really the
+ * launcher. In a tool whose value is the engagement evidence it retains, losing
+ * access to a project because of how the binary was started is a data-availability
+ * defect.
+ *
+ * Must run before `app.getPath('userData')` is called anywhere below.
+ */
+app.setName('TACNOC');
+
 let mainWindow: BrowserWindow | null = null;
 
 const session = new TacnocSession({

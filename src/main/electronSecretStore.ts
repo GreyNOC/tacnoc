@@ -7,7 +7,7 @@
  * stored obfuscated only — the UI surfaces this so the researcher can decide.
  */
 
-import { safeStorage } from 'electron';
+import { app, safeStorage } from 'electron';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import type { SecretStore } from '../engine/ca/secretStore.js';
@@ -62,9 +62,15 @@ export class ElectronSecretStore implements SecretStore {
       // encryption. Fail loud so callers fail closed. Mirrors FileSecretStore,
       // which throws on a GCM auth-tag mismatch.
       throw new Error(
-        `Secret "${key}" is present but could not be decrypted. This project's secrets were ` +
-          `sealed by a different OS user account or machine. Open it as the original user, or ` +
-          `restore the original secret store; the app will not regenerate keys over existing ones. ` +
+        `Secret "${key}" is present but could not be decrypted, so this project cannot be ` +
+          `opened. The most likely cause is that it was created by a DIFFERENT BUILD of this ` +
+          `app on this same machine: safeStorage keeps its master key under the app's userData ` +
+          `directory, so a project sealed by one identity cannot be read by another. This ` +
+          `process is "${app.getName()}", using ${app.getPath('userData')}. Check for sibling ` +
+          `directories next to it — a project created by the packaged build cannot be opened ` +
+          `by a dev launch, or vice versa, and re-launching under the original identity is the ` +
+          `fix. Failing that, the folder was copied from another OS user or machine. Nothing ` +
+          `is lost either way: the app will not regenerate keys over existing ones. ` +
           `(${String(err)})`,
       );
     }
