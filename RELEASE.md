@@ -125,8 +125,8 @@ tooling, neither in the shipped runtime), SBOM regenerated. Windows x64:
 
 | Artifact | SHA-256 |
 |---|---|
-| `TACNOC-0.5.2-Portable-x64.exe` (portable) | `1afe0cd1dbbf8dc5c6c617c4884e9009e8211a43773333bd120b26d454d1d8e4` |
-| `TACNOC-0.5.2-Setup-x64.exe` (NSIS) | `da3f6665a416728b1da3570feb94bfc43263babb342b685ad2104c8596cd8c85` |
+| `TACNOC-0.5.2-Portable-x64.exe` (portable) | `05c7c74fc75ac43852d49166d010951a581ffe6c0ad07c5ceec7c952fcb9a4e8` |
+| `TACNOC-0.5.2-Setup-x64.exe` (NSIS) | `e5476730132e56e0ee58821698a848dc6abcb11591384028eaaf30cafc646e0f` |
 
 Manifest: `dist/SHA256SUMS-windows.txt`. macOS/Linux artifacts were not built on
 this host. The unsigned-install caveats below apply identically to this cut.
