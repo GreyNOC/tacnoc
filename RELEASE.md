@@ -109,6 +109,35 @@ npm run release:prepare      # ci gate + full dependency audit + SBOM
 git tag vX.Y.Z && git push --tags   # triggers release.yml (drafts the release)
 ```
 
+### v0.5.2 — cut UNSIGNED (operator decision, 2026-08-09)
+
+`v0.5.2` (the wiring QA/QC pass — see `CHANGELOG.md`) was built and tagged
+locally with **no code signing**, the same deliberate operator decision as every
+cut before it. `electron-builder` logs `signing with signtool.exe` during the
+build; with no certificate configured nothing is applied, and
+`Get-AuthenticodeSignature` on the artifacts reports `NotSigned`. Verified rather
+than assumed.
+
+Gate: 333 unit tests green, all 9 E2E specs green **including
+`packaged.spec.ts` against the binaries below**, full-tree `npm audit` clean
+(the `js-yaml` and `nanoid` advisories were cleared in the lockfile — both build
+tooling, neither in the shipped runtime), SBOM regenerated. Windows x64:
+
+| Artifact | SHA-256 |
+|---|---|
+| `TACNOC-0.5.2-Portable-x64.exe` (portable) | `1afe0cd1dbbf8dc5c6c617c4884e9009e8211a43773333bd120b26d454d1d8e4` |
+| `TACNOC-0.5.2-Setup-x64.exe` (NSIS) | `da3f6665a416728b1da3570feb94bfc43263babb342b685ad2104c8596cd8c85` |
+
+Manifest: `dist/SHA256SUMS-windows.txt`. macOS/Linux artifacts were not built on
+this host. The unsigned-install caveats below apply identically to this cut.
+
+Known gate deviation: `npm run ci` cannot pass its `format:check` step on a
+checkout with `core.autocrlf=true`, because prettier is pinned to
+`endOfLine: lf` and the working tree is CRLF. It flags every file and predates
+this release. Lint, typecheck, and tests were run and are green; only the files
+touched by this change were formatted. Fix the checkout config rather than
+reformatting the repo.
+
 ### v0.2.0 — cut UNSIGNED (operator decision, 2026-07-17)
 
 > Built and shipped before the app was renamed to TACNOC — the artifacts below
