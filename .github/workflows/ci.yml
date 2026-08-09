@@ -1,10 +1,14 @@
 name: CI
 
+# This repository's default branch is `master`. The trigger said `main`, so the
+# gate this workflow exists to enforce had never run on a single push or PR —
+# a green-looking process that was not running. `main` is kept for a future
+# rename rather than trading one silent miss for another.
 on:
   push:
-    branches: [main]
+    branches: [master, main]
   pull_request:
-    branches: [main]
+    branches: [master, main]
 
 jobs:
   quality:

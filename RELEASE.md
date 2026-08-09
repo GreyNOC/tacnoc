@@ -196,7 +196,7 @@ next cut.
 ## CI
 
 - `ci.yml` runs the quality gate + build + full dependency audit + SBOM on every push
-  and PR to `main`.
+  and PR to `master` (the default branch) or `main`.
 - `release.yml` (on a `v*` tag) builds installers across Windows/macOS/Linux,
   checksums them, generates the SBOM, and **drafts** a GitHub release with the
   artifacts attached.
