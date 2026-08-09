@@ -131,12 +131,15 @@ tooling, neither in the shipped runtime), SBOM regenerated. Windows x64:
 Manifest: `dist/SHA256SUMS-windows.txt`. macOS/Linux artifacts were not built on
 this host. The unsigned-install caveats below apply identically to this cut.
 
-Known gate deviation: `npm run ci` cannot pass its `format:check` step on a
-checkout with `core.autocrlf=true`, because prettier is pinned to
-`endOfLine: lf` and the working tree is CRLF. It flags every file and predates
-this release. Lint, typecheck, and tests were run and are green; only the files
-touched by this change were formatted. Fix the checkout config rather than
-reformatting the repo.
+This is the first cut where `npm run ci` passes in full. `format:check` had been
+failing on every file on any Windows checkout — Git for Windows checks out CRLF,
+prettier is pinned to `endOfLine: lf` — which is what killed the v0.4.0 and
+v0.4.1 release builds on `windows-latest` ("Code style issues found in 130
+files") and left both without artifacts. A `.gitattributes` with
+`* text=auto eol=lf` fixes the checkout; the index was already LF, so nothing was
+reformatted. `ci.yml` also triggered only on `main` while the default branch is
+`master`, so the gate had never run on a push or PR at all; both branch names are
+now listed.
 
 ### v0.2.0 — cut UNSIGNED (operator decision, 2026-07-17)
 
