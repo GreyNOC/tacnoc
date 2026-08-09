@@ -259,6 +259,7 @@ const handlers: Record<string, Handler> = {
   startMeshRun: (s, _w, [plan]) => s.startMeshRun(plan as never),
   stopMeshRun: (s, _w, [id]) => s.stopMeshRun(id as string),
   getMeshRun: (s, _w, [id]) => s.getMeshRun(id as string),
+  getActiveMeshRun: (s) => s.getActiveMeshRun(),
 };
 
 function ensureProjectPath(dir: string, name: string): string {

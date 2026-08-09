@@ -97,8 +97,23 @@ export function VariationView(): JSX.Element {
 
   const run = async (): Promise<void> => {
     if (!jobId) return;
-    await api.runVariationJob(jobId);
+    setError(null);
+    try {
+      await api.runVariationJob(jobId);
+    } catch (e) {
+      // A refusal here is the scope gate or a limit doing its job — the operator
+      // has to see which. Unreported, a blocked run is indistinguishable from a
+      // run that found nothing.
+      setError(String(e instanceof Error ? e.message : e));
+    }
     void api.getVariationResults(jobId).then(setResults);
+  };
+
+  /** Job controls report failures instead of dropping them into a dead promise. */
+  const control = (action: (id: string) => Promise<void>) => (): void => {
+    if (!jobId) return;
+    setError(null);
+    void action(jobId).catch((e: unknown) => setError(String(e instanceof Error ? e.message : e)));
   };
 
   const addPosition = (): void =>
@@ -121,17 +136,13 @@ export function VariationView(): JSX.Element {
         >
           Run
         </button>
-        <button disabled={!jobId} onClick={() => jobId && api.pauseVariationJob(jobId)}>
+        <button disabled={!jobId} onClick={control(api.pauseVariationJob)}>
           Pause
         </button>
-        <button disabled={!jobId} onClick={() => jobId && api.resumeVariationJob(jobId)}>
+        <button disabled={!jobId} onClick={control(api.resumeVariationJob)}>
           Resume
         </button>
-        <button
-          className="danger"
-          disabled={!jobId}
-          onClick={() => jobId && api.stopVariationJob(jobId)}
-        >
+        <button className="danger" disabled={!jobId} onClick={control(api.stopVariationJob)}>
           Stop
         </button>
       </div>

@@ -126,6 +126,7 @@ export const INVOKE_METHODS = [
   'startMeshRun',
   'stopMeshRun',
   'getMeshRun',
+  'getActiveMeshRun',
 ] as const;
 
 export type InvokeMethod = (typeof INVOKE_METHODS)[number];

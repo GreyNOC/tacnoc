@@ -615,3 +615,84 @@ describe('a declined turn does not throw the run away', () => {
     expect(provider.seenPrompts[1]).toContain('x.test');
   });
 });
+
+/**
+ * The per-run active-request cap is enforced PER RUN. Nothing serialized runs,
+ * so three concurrent runs spent 3× the cap against the target while every
+ * number the operator could see still read "within budget". Reachable without
+ * intent: leaving the AI view and returning re-enabled Start, because the view's
+ * only handle on the run was a ref that did not survive the remount.
+ */
+describe('one mesh run at a time', () => {
+  /** A provider slow enough that a second start() lands while the first is live. */
+  class SlowProvider implements LlmProvider {
+    readonly id = 'slow';
+    async runAgent(o: AgentTurnOptions): Promise<AgentTurnResult> {
+      const role = /Your role: (\w+)/.exec(o.system)?.[1]?.toLowerCase() ?? 'unknown';
+      await delay(30);
+      const mutating = o.tools.find((t) => t.mutates);
+      if (mutating) {
+        for (let i = 0; i < 50; i += 1) {
+          if (o.signal?.aborted) break;
+          const call = { id: `c${i}`, name: mutating.name, input: {} };
+          o.onToolCall?.(call);
+          o.onToolResult?.(call, await mutating.handler(call.input));
+        }
+      }
+      return {
+        text: role === 'analyst' ? 'DONE' : `${role} done`,
+        tokens: { input: 1, output: 1 },
+        stopReason: 'end_turn',
+      };
+    }
+  }
+
+  function orchestrator(): MeshOrchestrator {
+    return new MeshOrchestrator({
+      getScope: () => IN_SCOPE,
+      audit: () => {},
+      onStep: () => {},
+      onProgress: () => {},
+    });
+  }
+
+  it('refuses a second run while one is in flight, so the cap keeps its meaning', async () => {
+    let probes = 0;
+    const orch = orchestrator();
+    const ctx = {
+      provider: new SlowProvider(),
+      config: baseConfig({ maxActiveRequestsPerRun: 3 }),
+      tools: makeTools(() => (probes += 1)),
+    };
+
+    const first = orch.start({ objective: 'one' }, ctx);
+    expect(() => orch.start({ objective: 'two' }, ctx)).toThrow(/already in progress/i);
+
+    expect(await waitForTerminal(orch, first.runId)).toBe('done');
+    // Before the guard this was 3 runs × 3 requests = 9.
+    expect(probes).toBe(3);
+
+    // Once it is finished, the next run starts normally.
+    const second = orch.start({ objective: 'two' }, ctx);
+    expect(await waitForTerminal(orch, second.runId)).toBe('done');
+  });
+
+  it('exposes the in-flight run so a remounted view can reattach and stop it', async () => {
+    const orch = orchestrator();
+    const ctx = {
+      provider: new SlowProvider(),
+      config: baseConfig({ maxActiveRequestsPerRun: 3 }),
+      tools: makeTools(() => {}),
+    };
+    expect(orch.activeRun()).toBeUndefined();
+
+    const run = orch.start({ objective: 'one' }, ctx);
+    const active = orch.activeRun();
+    expect(active?.runId).toBe(run.runId);
+
+    // The handle is enough to stop it — which is the whole point of exposing it.
+    orch.stop(active!.runId);
+    expect(await waitForTerminal(orch, run.runId)).toBe('stopped');
+    expect(orch.activeRun()).toBeUndefined();
+  });
+});

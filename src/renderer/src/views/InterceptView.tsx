@@ -42,9 +42,13 @@ export function InterceptView(): JSX.Element {
   const [draft, setDraft] = useState('');
   const [kind, setKind] = useState<'request' | 'response'>('request');
 
+  // Depend on the callback, not the whole store. The store value is a new object
+  // on every captured exchange, so keying this on `s` fired three IPC round-trips
+  // per request the proxy handled — for state that already arrives by event.
+  const refreshIntercept = s.refreshIntercept;
   useEffect(() => {
-    s.refreshIntercept();
-  }, [s]);
+    refreshIntercept();
+  }, [refreshIntercept]);
 
   const openRequest = (v: InterceptedRequestView): void => {
     setKind('request');

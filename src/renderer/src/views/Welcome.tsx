@@ -106,8 +106,9 @@ export function Welcome(): JSX.Element {
         <h2 style={{ marginTop: 0 }}>TACNOC</h2>
         <p className="hint">
           An extensible web-application security research suite for{' '}
-          <strong>authorized testing</strong>. The proxy binds to 127.0.0.1 and nothing is sent to
-          external services.
+          <strong>authorized testing</strong>. The proxy binds to 127.0.0.1, and nothing leaves the
+          machine unless you turn the AI mesh on — which is off by default and sends captured
+          traffic and your engagement folder to the model provider when enabled.
         </p>
 
         <div className="form-row">

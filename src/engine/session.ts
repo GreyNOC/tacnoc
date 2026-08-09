@@ -706,7 +706,10 @@ export class TacnocSession extends EventEmitter {
     return this.variation?.getResults(id) ?? [];
   }
 
-  /** Global emergency stop for ALL automated work. */
+  /**
+   * Global emergency stop for ALL automated work. The mesh is halted by the
+   * 'emergency-stop' listener wired in the constructor.
+   */
   emergencyStop(): void {
     this.variation?.emergencyStopAll();
     this.interceptor.releaseAll();
@@ -1427,6 +1430,11 @@ export class TacnocSession extends EventEmitter {
 
   getMeshRun(id: string): MeshRun | undefined {
     return this.mesh.get(id);
+  }
+
+  /** The run still in flight, so a remounted UI can reattach instead of idling. */
+  getActiveMeshRun(): MeshRunProgress | undefined {
+    return this.mesh.activeRun();
   }
 
   // ---- audit ----
