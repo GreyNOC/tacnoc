@@ -18,7 +18,8 @@ import type {
   LlmProvider,
 } from '../../src/engine/ai/provider.js';
 import { delay } from '../../src/engine/util/rateLimit.js';
-import type { AiConfig, MeshRunStatus, MeshStep } from '../../src/shared/ai.js';
+import { latestRunProgress } from '../../src/shared/ai.js';
+import type { AiConfig, MeshRunProgress, MeshRunStatus, MeshStep } from '../../src/shared/ai.js';
 import type { ScopeConfig } from '../../src/shared/scope.js';
 import type { AuditEntry } from '../../src/shared/project.js';
 
@@ -694,5 +695,79 @@ describe('one mesh run at a time', () => {
     orch.stop(active!.runId);
     expect(await waitForTerminal(orch, run.runId)).toBe('stopped');
     expect(orch.activeRun()).toBeUndefined();
+  });
+});
+
+/**
+ * Adoption races the live event stream in both directions. The dangerous one:
+ * a run that finishes while the adopting fetch is in flight emits its TERMINAL
+ * progress before the view knows which run to listen for, so the event is
+ * dropped and only the fetched snapshot carries the finish. Discarding that
+ * snapshot left the view on a run that had already stopped — Start disabled,
+ * Stop enabled, nothing left to stop, until the view was remounted.
+ */
+describe('reconciling an adopted run against live events', () => {
+  const progress = (over: Partial<MeshRunProgress> = {}): MeshRunProgress => ({
+    runId: 'run-1',
+    status: 'running',
+    stepCount: 1,
+    activeRequests: 0,
+    tokens: { input: 0, output: 0 },
+    startedAt: 1_000,
+    updatedAt: 1_000,
+    ...over,
+  });
+
+  it('takes the terminal snapshot when the run finished during adoption', () => {
+    const stale = progress({ status: 'running', updatedAt: 1_000 });
+    const terminal = progress({ status: 'done', updatedAt: 2_000 });
+    expect(latestRunProgress(stale, terminal)?.status).toBe('done');
+  });
+
+  it('does not undo events that landed while the snapshot was in flight', () => {
+    const fromEvent = progress({ status: 'done', updatedAt: 3_000 });
+    const olderSnapshot = progress({ status: 'running', updatedAt: 2_000 });
+    expect(latestRunProgress(fromEvent, olderSnapshot)?.status).toBe('done');
+  });
+
+  it('holds still on a tie rather than flickering', () => {
+    const a = progress({ role: 'attacker', updatedAt: 5_000 });
+    const b = progress({ role: 'analyst', updatedAt: 5_000 });
+    expect(latestRunProgress(a, b)?.role).toBe('attacker');
+  });
+
+  it('adopts whichever side exists, and a different run always wins', () => {
+    const a = progress();
+    expect(latestRunProgress(undefined, a)).toBe(a);
+    expect(latestRunProgress(a, undefined)).toBe(a);
+    const other = progress({ runId: 'run-2', updatedAt: 1 });
+    expect(latestRunProgress(a, other)).toBe(other);
+  });
+
+  // The invariant latestRunProgress rests on: progress emissions for a run are
+  // ordered by updatedAt. Pins it against a future emission that stamps a
+  // hand-rolled or rewound timestamp, which would silently make "newest wins"
+  // pick the wrong one. (Stamping every emission in emitProgress is hardening on
+  // top of this — updatedAt was already non-decreasing, so it is not what this
+  // test catches.)
+  it('emits progress in updatedAt order, so snapshot and event can be compared', async () => {
+    const seen: MeshRunProgress[] = [];
+    const orch = new MeshOrchestrator({
+      getScope: () => IN_SCOPE,
+      audit: () => {},
+      onStep: () => {},
+      onProgress: (p) => seen.push(p),
+    });
+    const run = orch.start(
+      { objective: 'probe' },
+      { provider: new FakeProvider(), config: baseConfig(), tools: makeTools(() => {}) },
+    );
+    expect(await waitForTerminal(orch, run.runId)).toBe('done');
+
+    expect(seen.length).toBeGreaterThan(5);
+    for (let i = 1; i < seen.length; i += 1) {
+      expect(seen[i]!.updatedAt).toBeGreaterThanOrEqual(seen[i - 1]!.updatedAt);
+    }
+    expect(seen[seen.length - 1]!.updatedAt).toBeGreaterThanOrEqual(seen[0]!.startedAt);
   });
 });

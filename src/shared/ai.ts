@@ -145,6 +145,32 @@ export interface MeshRunProgress {
   error?: string;
 }
 
+/**
+ * Pick the more recent of two progress snapshots for the same run.
+ *
+ * A UI reattaching to a run in flight has two sources that can overtake each
+ * other: the live `mesh-progress` events, and the snapshot it fetched to adopt
+ * the run. Either can be the newer one. In particular, a run that finishes while
+ * the adopting fetch is in flight emits its TERMINAL event before the view knows
+ * which run to listen for, so the event is dropped — and applying the fetched
+ * snapshot blindly is what recovers from that. Applying it blindly the other way
+ * round would instead undo events that landed during the fetch, leaving the view
+ * showing a run as still going after it stopped.
+ *
+ * `updatedAt` is stamped on every emission by the orchestrator and is monotonic
+ * per run, so it decides. Ties keep `a`, which is the caller's existing state —
+ * equal timestamps mean equal generations, and holding still beats flickering.
+ */
+export function latestRunProgress(
+  a: MeshRunProgress | undefined,
+  b: MeshRunProgress | undefined,
+): MeshRunProgress | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  if (a.runId !== b.runId) return b;
+  return a.updatedAt >= b.updatedAt ? a : b;
+}
+
 export interface MeshRun {
   progress: MeshRunProgress;
   steps: MeshStep[];

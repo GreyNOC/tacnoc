@@ -5,6 +5,7 @@ import {
   AGENT_ROLES,
   AI_EFFORTS,
   defaultAiConfig,
+  latestRunProgress,
   type AgentRole,
   type AiAutonomy,
   type AiConfig,
@@ -50,9 +51,19 @@ export function AiMeshView(): JSX.Element {
     const active = await api.getActiveMeshRun().catch(() => undefined);
     if (!active) return;
     runIdRef.current = active.runId;
-    setRun(active);
+    // Never move the displayed progress backwards. Both fetches below race the
+    // live event stream in both directions: events that land before `runIdRef`
+    // is set are dropped and only a snapshot can recover them, and events that
+    // land after are newer than any snapshot already in flight.
+    setRun((prev) => latestRunProgress(prev, active));
     const full = await api.getMeshRun(active.runId).catch(() => undefined);
     if (full) {
+      // The run can finish DURING adoption: its terminal mesh-progress fires
+      // while runIdRef is still unset, so the handler drops it and this snapshot
+      // is the only thing that carries the terminal status. Without applying it
+      // the view sits on a "running" run forever — Start disabled, Stop enabled,
+      // nothing left to stop.
+      setRun((prev) => latestRunProgress(prev, full.progress));
       // Merge rather than replace: the live subscription is already running, so
       // steps emitted during this round-trip are in `prev` but not the snapshot.
       // Overwriting would drop them from the activity log.

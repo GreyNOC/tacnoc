@@ -621,7 +621,18 @@ export class MeshOrchestrator {
     this.emitProgress(state);
   }
 
+  /**
+   * Stamp `updatedAt` here, so it marks every progress emission rather than only
+   * the ones whose caller happened to set it.
+   *
+   * A role change and an active-request charge both emitted without touching it,
+   * which made the field useless as an ordering key — and a consumer that has to
+   * reconcile a snapshot against live events (the AI view, reattaching to a run
+   * in flight) has nothing else to order them by. Monotonic per run, so "newest
+   * wins" is decidable.
+   */
   private emitProgress(state: RunState): void {
+    state.progress.updatedAt = Math.max(state.progress.updatedAt, Date.now());
     this.deps.onProgress({ ...state.progress, tokens: { ...state.progress.tokens } });
   }
 
