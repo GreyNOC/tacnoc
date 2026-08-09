@@ -84,6 +84,14 @@ export function EngagementView(): JSX.Element {
       .then(setProfile)
       .catch(() => undefined);
     void refresh();
+    // The CA and the profile both change from outside this page — most sharply
+    // when the mesh is granted cert ops and rotates or revokes the CA mid-run.
+    // Both events were emitted and nothing in the renderer listened, so the
+    // readiness card kept grading an interception setup that no longer existed.
+    return api.onEvent((e) => {
+      if (e.type === 'ca-changed') void refresh();
+      else if (e.type === 'engagement-changed') setProfile(e.payload);
+    });
   }, [refresh]);
 
   /**

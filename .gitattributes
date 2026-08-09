@@ -1,0 +1,23 @@
+# Normalize line endings so the working tree is LF on every platform.
+#
+# Without this, Git for Windows checks out CRLF (core.autocrlf=true is its
+# default), while `.prettierrc.json` pins `endOfLine: "lf"`. `npm run ci` then
+# fails `format:check` on EVERY file — which is exactly how the v0.4.0 and
+# v0.4.1 release builds died on the windows-latest runner: not a code problem,
+# a checkout problem, reported as 130 style violations.
+#
+# `text=auto eol=lf` stores LF in the repository (as it always did) and now also
+# checks LF out, regardless of the developer's or the runner's autocrlf setting.
+* text=auto eol=lf
+
+# Binary — never touch these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.wasm binary
+*.exe binary
+*.zip binary
+*.7z binary
+*.gz binary

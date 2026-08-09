@@ -109,6 +109,38 @@ npm run release:prepare      # ci gate + full dependency audit + SBOM
 git tag vX.Y.Z && git push --tags   # triggers release.yml (drafts the release)
 ```
 
+### v0.5.2 — cut UNSIGNED (operator decision, 2026-08-09)
+
+`v0.5.2` (the wiring QA/QC pass — see `CHANGELOG.md`) was built and tagged
+locally with **no code signing**, the same deliberate operator decision as every
+cut before it. `electron-builder` logs `signing with signtool.exe` during the
+build; with no certificate configured nothing is applied, and
+`Get-AuthenticodeSignature` on the artifacts reports `NotSigned`. Verified rather
+than assumed.
+
+Gate: 333 unit tests green, all 9 E2E specs green **including
+`packaged.spec.ts` against the binaries below**, full-tree `npm audit` clean
+(the `js-yaml` and `nanoid` advisories were cleared in the lockfile — both build
+tooling, neither in the shipped runtime), SBOM regenerated. Windows x64:
+
+| Artifact | SHA-256 |
+|---|---|
+| `TACNOC-0.5.2-Portable-x64.exe` (portable) | `05c7c74fc75ac43852d49166d010951a581ffe6c0ad07c5ceec7c952fcb9a4e8` |
+| `TACNOC-0.5.2-Setup-x64.exe` (NSIS) | `e5476730132e56e0ee58821698a848dc6abcb11591384028eaaf30cafc646e0f` |
+
+Manifest: `dist/SHA256SUMS-windows.txt`. macOS/Linux artifacts were not built on
+this host. The unsigned-install caveats below apply identically to this cut.
+
+This is the first cut where `npm run ci` passes in full. `format:check` had been
+failing on every file on any Windows checkout — Git for Windows checks out CRLF,
+prettier is pinned to `endOfLine: lf` — which is what killed the v0.4.0 and
+v0.4.1 release builds on `windows-latest` ("Code style issues found in 130
+files") and left both without artifacts. A `.gitattributes` with
+`* text=auto eol=lf` fixes the checkout; the index was already LF, so nothing was
+reformatted. `ci.yml` also triggered only on `main` while the default branch is
+`master`, so the gate had never run on a push or PR at all; both branch names are
+now listed.
+
 ### v0.2.0 — cut UNSIGNED (operator decision, 2026-07-17)
 
 > Built and shipped before the app was renamed to TACNOC — the artifacts below
@@ -167,7 +199,7 @@ next cut.
 ## CI
 
 - `ci.yml` runs the quality gate + build + full dependency audit + SBOM on every push
-  and PR to `main`.
+  and PR to `master` (the default branch) or `main`.
 - `release.yml` (on a `v*` tag) builds installers across Windows/macOS/Linux,
   checksums them, generates the SBOM, and **drafts** a GitHub release with the
   artifacts attached.

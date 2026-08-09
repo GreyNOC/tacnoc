@@ -1,10 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.js';
 import {
   AGENT_ROLES,
   AI_EFFORTS,
   defaultAiConfig,
+  latestRunProgress,
   type AgentRole,
   type AiAutonomy,
   type AiConfig,
@@ -38,6 +39,42 @@ export function AiMeshView(): JSX.Element {
   const [report, setReport] = useState<string | undefined>(undefined);
   const runIdRef = useRef<string | undefined>(undefined);
 
+  /**
+   * Reattach to a run that is still going.
+   *
+   * Leaving this view unmounts it, and the run handle lived only in a ref — so
+   * coming back showed an idle screen with Stop greyed out while the mesh was
+   * still sending traffic, and Start looked available again. The run outlives
+   * the view, so the view has to ask for it rather than assume there isn't one.
+   */
+  const adoptActiveRun = useCallback(async (): Promise<void> => {
+    const active = await api.getActiveMeshRun().catch(() => undefined);
+    if (!active) return;
+    runIdRef.current = active.runId;
+    // Never move the displayed progress backwards. Both fetches below race the
+    // live event stream in both directions: events that land before `runIdRef`
+    // is set are dropped and only a snapshot can recover them, and events that
+    // land after are newer than any snapshot already in flight.
+    setRun((prev) => latestRunProgress(prev, active));
+    const full = await api.getMeshRun(active.runId).catch(() => undefined);
+    if (full) {
+      // The run can finish DURING adoption: its terminal mesh-progress fires
+      // while runIdRef is still unset, so the handler drops it and this snapshot
+      // is the only thing that carries the terminal status. Without applying it
+      // the view sits on a "running" run forever — Start disabled, Stop enabled,
+      // nothing left to stop.
+      setRun((prev) => latestRunProgress(prev, full.progress));
+      // Merge rather than replace: the live subscription is already running, so
+      // steps emitted during this round-trip are in `prev` but not the snapshot.
+      // Overwriting would drop them from the activity log.
+      setSteps((prev) => {
+        const seen = new Set(full.steps.map((step) => step.id));
+        return [...full.steps, ...prev.filter((step) => !seen.has(step.id))];
+      });
+      setReport(full.report);
+    }
+  }, []);
+
   useEffect(() => {
     void api
       .getAiConfig()
@@ -47,6 +84,7 @@ export function AiMeshView(): JSX.Element {
       .getAiKeyStatus()
       .then(setKeyStatus)
       .catch(() => undefined);
+    void adoptActiveRun();
     return api.onEvent((e) => {
       if (e.type === 'mesh-step') {
         if (e.payload.runId === runIdRef.current) setSteps((prev) => [...prev, e.payload]);
@@ -58,7 +96,7 @@ export function AiMeshView(): JSX.Element {
         }
       }
     });
-  }, []);
+  }, [adoptActiveRun]);
 
   const saveKey = async (): Promise<void> => {
     try {

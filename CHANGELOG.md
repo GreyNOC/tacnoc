@@ -8,6 +8,59 @@ All notable changes to TACNOC are documented here. The format follows
 
 _Nothing yet._
 
+## [0.5.2] — 2026-08-09
+
+### Fixed — QA/QC pass on wiring: controls that looked like they worked
+
+A pass across the whole renderer → IPC → engine chain, cross-referencing every
+invokable method and every emitted event against what actually consumes it. The
+IPC spine held: allowlist/handler parity is asserted at startup, every method has
+a wrapper, and every wrapper is reachable. Everything below was at the edges —
+and every one of them was confirmed by driving the real app, not by reading.
+
+- **The scope editor saved wider rules than it displayed.** Ports, scheme, and
+  path prefix were uncontrolled inputs, so adding a rule reset the draft while
+  the boxes kept showing what had been typed. The next rule was then stored with
+  no port, no scheme, and no path while all three were still on screen — a rule
+  strictly wider than the one the operator was looking at, in the fail-closed gate
+  that decides whether a request is authorized. Every field is now controlled off
+  the draft and clears on add.
+- **Concurrent mesh runs multiplied the request budget.** The active-request cap
+  is enforced per run and nothing serialized runs, so three runs with a cap of 3
+  sent nine requests to the target while every number the operator could see still
+  read "within budget". The orchestrator now refuses to start a run while one is
+  in flight, and says what is already spending.
+- **A mesh run could be left running with no way to stop it.** The AI view's only
+  handle on a run was a ref that did not survive leaving the view, so returning to
+  it showed an idle screen — Stop greyed out, Start apparently available — over a
+  run still sending traffic, reachable only by emergency stop. The view now
+  reattaches to the run in flight, restoring its steps and report.
+- **"Save CA certificate" failed silently on a revoked CA.** The main process
+  correctly refuses to write a 0-byte `.crt`, but that rejection went nowhere: the
+  button stayed enabled and the click produced no visible response at all, which
+  reads as success. The revoked state is now stated where the fingerprint goes,
+  the button is disabled, and the error is surfaced.
+- **`ca-changed` and `engagement-changed` were emitted to nobody.** Neither the
+  Certificate nor the Engagement view listened, so a CA rotated or revoked from
+  elsewhere — including by the mesh when it holds cert ops mid-run — left both
+  screens presenting an interception setup that no longer existed. Both now follow
+  the events.
+- **Two effects keyed on the whole store object.** The store value changes on every
+  captured exchange, so Intercept re-fetched its state three times per proxied
+  request, and a toast restarted its dismiss timer on each one — staying pinned for
+  as long as traffic kept arriving.
+- **Silent failures on the Variation job controls** (pause/resume/stop dropped
+  errors into a dead promise) and a **stale finding detail pane** after suppressing,
+  which kept offering to suppress a finding that already was.
+- **The welcome screen claimed "nothing is sent to external services"**, which the
+  AI mesh made untrue. It now says what leaves the machine and when.
+
+### Security
+
+- `js-yaml` and `nanoid` advisories cleared (lockfile only). Both were build
+  tooling — electron-builder/eslint and vite→postcss — and neither reaches the
+  shipped runtime, but the release gate audits the full tree.
+
 ## [0.5.1] — 2026-08-04
 
 ### Fixed — every long AI turn died before it was sent

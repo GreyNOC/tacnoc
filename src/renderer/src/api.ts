@@ -181,6 +181,7 @@ export const api = {
   startMeshRun: (plan: MeshRunPlan) => b().invoke<MeshRunProgress>('startMeshRun', plan),
   stopMeshRun: (id: string) => b().invoke<void>('stopMeshRun', id),
   getMeshRun: (id: string) => b().invoke<MeshRun | undefined>('getMeshRun', id),
+  getActiveMeshRun: () => b().invoke<MeshRunProgress | undefined>('getActiveMeshRun'),
 };
 
 export type Api = typeof api;

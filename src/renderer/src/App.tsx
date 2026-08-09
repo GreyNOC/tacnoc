@@ -201,11 +201,15 @@ function ActiveView(): JSX.Element {
 
 function Toast(): JSX.Element | null {
   const s = useStore();
+  // Keyed on the message, not the store: the store value changes on every
+  // captured exchange, which restarted this timer each time and left the toast
+  // pinned on screen for as long as traffic kept arriving.
+  const { toast, setToast } = s;
   useEffect(() => {
-    if (!s.toast) return;
-    const t = setTimeout(() => s.setToast(undefined), 4000);
+    if (!toast) return;
+    const t = setTimeout(() => setToast(undefined), 4000);
     return () => clearTimeout(t);
-  }, [s]);
+  }, [toast, setToast]);
   if (!s.toast) return null;
   return (
     <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 50 }}>

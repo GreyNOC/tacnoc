@@ -23,6 +23,9 @@ export function ScopeView(): JSX.Element {
   const setToast = s.setToast;
   const [scope, setScope] = useState<ScopeConfig>({ include: [], exclude: [] });
   const [draft, setDraft] = useState<ScopeRule>(newRule());
+  // The ports box is text while it is being typed ("8443," mid-entry parses to
+  // one port); `draft.ports` holds the parsed truth that gets saved.
+  const [portsText, setPortsText] = useState('');
   const [list, setList] = useState<'include' | 'exclude'>('include');
 
   useEffect(() => {
@@ -64,6 +67,7 @@ export function ScopeView(): JSX.Element {
     };
     await persist(next);
     setDraft(newRule());
+    setPortsText('');
   };
 
   const removeRule = async (bucket: 'include' | 'exclude', id: string): Promise<void> => {
@@ -169,20 +173,35 @@ export function ScopeView(): JSX.Element {
               value={draft.host}
               onChange={(e) => setDraft({ ...draft, host: e.target.value })}
             />
+            {/*
+              Every field here is CONTROLLED off `draft`.
+
+              Ports, scheme, and path were uncontrolled inputs, so adding a rule
+              reset the draft while the boxes kept displaying what had just been
+              typed. The next rule was then saved with no port, no scheme, and no
+              path restriction while the screen still showed all three — a scope
+              rule strictly WIDER than the one the operator was looking at. In a
+              fail-closed scope gate, the displayed rule and the stored rule have
+              to be the same rule.
+            */}
             <input
               placeholder="ports (comma) — blank = any"
               style={{ width: 160 }}
-              onChange={(e) =>
+              value={portsText}
+              onChange={(e) => {
+                setPortsText(e.target.value);
                 setDraft({
                   ...draft,
                   ports: e.target.value
                     .split(',')
                     .map((x) => Number(x.trim()))
                     .filter((n) => Number.isFinite(n)),
-                })
-              }
+                });
+              }}
             />
             <select
+              aria-label="Scheme"
+              value={draft.schemes[0] ?? ''}
               onChange={(e) =>
                 setDraft({
                   ...draft,
@@ -197,6 +216,7 @@ export function ScopeView(): JSX.Element {
             <input
               placeholder="path prefix (optional)"
               style={{ width: 180 }}
+              value={draft.path?.value ?? ''}
               onChange={(e) =>
                 setDraft({
                   ...draft,

@@ -24,6 +24,10 @@ export function FindingsView(): JSX.Element {
 
   const suppress = async (f: Finding, on: boolean): Promise<void> => {
     await api.setFindingSuppressed(f.id, on);
+    // Move the open detail pane with it. Reloading the list alone left `selected`
+    // holding the pre-suppression object, so the button kept offering to suppress
+    // a finding that already was.
+    setSelected({ ...f, suppressed: on });
     load();
     s.refreshFindings();
   };

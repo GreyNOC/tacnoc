@@ -63,6 +63,9 @@ const MIN_TASK_BUDGET = 20_000; // SDK minimum for output_config.task_budget
 const MAX_ITERATIONS_PER_ROLE = 24; // hard cap on a single role's tool-call loop
 const MAX_RETAINED_RUNS = 20; // cap on finished-run history kept in memory
 
+/** A run in one of these states is finished; anything else is still spending. */
+const TERMINAL_STATUSES = new Set<MeshRunStatus>(['done', 'error', 'stopped']);
+
 /**
  * Which tool effects each role may call.
  *
@@ -137,6 +140,21 @@ export class MeshOrchestrator {
     if (!plan.objective || !plan.objective.trim()) {
       throw new Error('Provide a testing objective for the mesh run.');
     }
+    // One run at a time. The active-request cap is per-run, so N concurrent runs
+    // spend N×cap requests against the target while every displayed number still
+    // reads "within budget" — the cap stops meaning what the operator set it to.
+    // This is reachable by accident, not just by intent: leaving the AI view and
+    // returning re-enables Start, because the view's handle on the run does not
+    // survive the remount.
+    const active = this.activeRun();
+    if (active) {
+      throw new Error(
+        `A mesh run is already in progress (${active.status}, ${active.stepCount} steps, ` +
+          `${active.activeRequests} request(s) used). Stop it before starting another — the ` +
+          'per-run request budget is enforced per run, so concurrent runs would spend a multiple ' +
+          'of the cap you set.',
+      );
+    }
     // Count only ENABLED rules, the same way the evaluator does. Counting all
     // of them let a project whose include rules were switched off start a run
     // that then had every single request refused — provider tokens spent to
@@ -202,6 +220,23 @@ export class MeshOrchestrator {
       steps: [...state.steps],
       ...(state.report !== undefined ? { report: state.report } : {}),
     };
+  }
+
+  /**
+   * The run still in flight, if any.
+   *
+   * Exists so a UI that lost its handle on a run — every time the operator
+   * navigates away from the AI view and back — can reattach to it instead of
+   * showing an idle screen over a run that is still sending traffic and can no
+   * longer be stopped from anywhere but emergency stop.
+   */
+  activeRun(): MeshRunProgress | undefined {
+    for (const state of this.runs.values()) {
+      if (!TERMINAL_STATUSES.has(state.progress.status)) {
+        return { ...state.progress, tokens: { ...state.progress.tokens } };
+      }
+    }
+    return undefined;
   }
 
   // ---- internals ----
@@ -508,10 +543,9 @@ export class MeshOrchestrator {
   /** Evict oldest terminal runs so the in-memory history cannot grow without bound. */
   private prune(): void {
     if (this.runs.size <= MAX_RETAINED_RUNS) return;
-    const terminal = new Set<MeshRunStatus>(['done', 'error', 'stopped']);
     for (const [id, st] of this.runs) {
       if (this.runs.size <= MAX_RETAINED_RUNS) break;
-      if (terminal.has(st.progress.status)) this.runs.delete(id);
+      if (TERMINAL_STATUSES.has(st.progress.status)) this.runs.delete(id);
     }
   }
 
@@ -587,7 +621,18 @@ export class MeshOrchestrator {
     this.emitProgress(state);
   }
 
+  /**
+   * Stamp `updatedAt` here, so it marks every progress emission rather than only
+   * the ones whose caller happened to set it.
+   *
+   * A role change and an active-request charge both emitted without touching it,
+   * which made the field useless as an ordering key — and a consumer that has to
+   * reconcile a snapshot against live events (the AI view, reattaching to a run
+   * in flight) has nothing else to order them by. Monotonic per run, so "newest
+   * wins" is decidable.
+   */
   private emitProgress(state: RunState): void {
+    state.progress.updatedAt = Math.max(state.progress.updatedAt, Date.now());
     this.deps.onProgress({ ...state.progress, tokens: { ...state.progress.tokens } });
   }
 
