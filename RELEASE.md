@@ -33,8 +33,17 @@ rebuilds, then produces both Windows artifacts and their checksum manifest:
 - `TACNOC-<version>-Portable-x64.exe` — portable, runs without installing.
 - `TACNOC-<version>-Setup-x64.exe` — NSIS installer.
 
+**Order matters when you build both.** `dist:win` deletes everything in `dist/`
+before it starts, so running it *after* `dist:linux` silently destroys the Linux
+archive you just built — and the checksum manifest is rewritten without it, so
+nothing complains. Build Windows first, Linux second. (`dist:linux` does not
+clean `dist/`, which is what makes that order work.)
+
 **Linux one-shot:** `npm run dist:linux` rebuilds and produces
-`TACNOC-<version>-linux-x64.tar.gz` — extract it and run `./tacnoc`.
+`TACNOC-<version>-linux-x64.tar.gz` — extract it and run `./greynoc-tacnoc`.
+(The executable takes its name from the package `name`, not the `productName`,
+so it is `greynoc-tacnoc` rather than `tacnoc`. Verified against the built
+archive, not assumed.)
 
 ### Which Linux target can be built where
 
@@ -47,9 +56,14 @@ A Windows workstation can therefore cut the portable `.exe` **and** a runnable
 Linux `tar.gz`, but not an AppImage. Build AppImage on Linux
 (`npx electron-builder --linux AppImage`) or through the `release.yml` matrix.
 
-Note that a bare `npm run dist` builds every configured target for the host
-platform, so on Windows it will attempt AppImage and fail — use the per-OS
-scripts above.
+Note that a bare `npm run dist` builds only the **host platform's** configured
+targets — on Windows that is `nsis` + `portable`, and it succeeds. It does *not*
+attempt AppImage: that is a `linux:` target, reached only when `--linux` is
+passed, which is why `release.yml` can run a bare `npm run dist` on every matrix
+leg. Use the per-OS scripts above for what they add on top — a cleaned `dist/`,
+pinned target flags, and the checksum manifest in one step — and `dist:linux`
+specifically for the Linux `tar.gz`, which a bare `npm run dist` on Windows will
+not produce.
 
 Build on each target OS (or via the `release.yml` GitHub Actions matrix). Output
 goes to `dist/`. `node_modules/node-sqlite3-wasm` is unpacked from the asar
@@ -112,12 +126,14 @@ git tag vX.Y.Z && git push --tags   # triggers release.yml (drafts the release)
 ### Tag record — correcting this file (2026-09-03)
 
 Two of the entries below say a version "was built and tagged locally". **The tag
-part was not true.** `git tag` and `git ls-remote --tags origin` both list only
-`v0.4.0` and `v0.4.1`; `CHANGELOG.md` records ten versions. Everything from
-v0.4.2 through v0.5.2 was built and recorded here but never tagged, and since
-`release.yml` triggers on a `v*` tag, **no draft GitHub release was ever produced
-for any of them.** The artifacts and hashes below are still accurate for what was
-built locally — what was wrong is the claim that a tag existed.
+part was not true.** Before this cut, `git tag` and `git ls-remote --tags origin`
+both listed only `v0.4.0` and `v0.4.1`, against the ten versions `CHANGELOG.md`
+recorded at the time; with `v0.5.3` they now list three tags against eleven
+versions. Everything from v0.4.2 through v0.5.2 was built and recorded here but
+never tagged, and since `release.yml` triggers on a `v*` tag, **no draft GitHub
+release was ever produced for any of them.** The artifacts and hashes below are
+still accurate for what was built locally — what was wrong is the claim that a
+tag existed.
 
 The entries are left in place rather than rewritten, with this correction above
 them, because the point of this file is an accurate record and quietly editing
@@ -129,21 +145,47 @@ the history would defeat it.
 with **no code signing**, the same deliberate operator decision as every cut
 before it, and it is the first version since v0.4.1 to actually carry a tag.
 
-Gate: 365 unit/integration tests green, all 10 E2E specs green **including
+> **The `v0.5.3` tag points at commit `796c551`, which is one commit behind the
+> artifacts recorded below.** A release-record audit run after tagging found
+> several documentation claims in this repo that did not match the code —
+> including two in this file and two in the v0.5.3 changelog entry — and
+> correcting them produced a follow-up commit. The delta is documentation, tests,
+> and one source comment: **no shipped behaviour differs** between the tagged
+> commit and the built artifacts. Re-tag on the merge commit so the tag and the
+> record line up again.
+
+Gate: 368 unit/integration tests green, all 10 E2E specs green **including
 `packaged.spec.ts` against the binaries below**, full-tree `npm audit` clean
 (three build-tooling advisories — `browserslist`, `fast-uri`, `@xmldom/xmldom` —
 cleared in the lockfile; none reaches the shipped runtime), SBOM regenerated.
 `electron-builder` logs `signing with signtool.exe`; with no certificate
-configured nothing is applied, and `Get-AuthenticodeSignature` on both artifacts
-reports `NotSigned`. Verified rather than assumed. Windows x64:
+configured nothing is applied, and `Get-AuthenticodeSignature` on both Windows
+artifacts reports `NotSigned`. Verified rather than assumed.
+
+Built on a Windows x64 host — both Windows targets natively, and the Linux
+`tar.gz` cross-built (electron-builder downloads the Linux Electron and
+repackages the app directory; no Linux-only tooling is involved):
 
 | Artifact | SHA-256 |
 |---|---|
-| `TACNOC-0.5.3-Portable-x64.exe` (portable) | `08ac4a7c2dd96a5243af90d129e5252999a823f7e2c885470fa859a4c1dacee8` |
-| `TACNOC-0.5.3-Setup-x64.exe` (NSIS) | `f1c8ac086e22d6a34a8ac44cc43835a4cd32aa4b15e11329dec8381294234ba3` |
+| `TACNOC-0.5.3-Portable-x64.exe` (portable) | `c36cddfbf300c0853b6fd29a380d3fce4945873d37e62780a75020585d95fa88` |
+| `TACNOC-0.5.3-Setup-x64.exe` (NSIS) | `de010b59b6e6c79dfddfc9f80db61b64b797c7af0954b50d70c2d7e741deff9c` |
+| `TACNOC-0.5.3-linux-x64.tar.gz` (portable, cross-built) | `0ec0d11ae01943cd65284ef16c0a5f5d2bf8d7327b5509850bdb466feb1b7358` |
 
-Manifest: `dist/SHA256SUMS-windows.txt`. macOS/Linux artifacts were not built on
-this host. The unsigned-install caveats below apply identically to this cut.
+Manifest: `dist/SHA256SUMS-windows.txt`. **That filename names the build host,
+not the target** — `scripts/checksums.mjs` labels the manifest by
+`process.platform`, so this one Windows-built manifest covers all three artifacts
+including the cross-built Linux archive. On the `release.yml` matrix each OS
+builds its own targets and the names line up with the contents; a local
+cross-build is the case where they do not. Nothing is missing from the manifest,
+but do not go looking for a `SHA256SUMS-linux.txt` from this cut.
+
+The Linux archive was verified by listing it: it unpacks to
+`TACNOC-0.5.3-linux-x64/` containing the `greynoc-tacnoc` executable. **AppImage
+was not built** — Windows cannot produce one (see the target table above) — and
+**no macOS artifact was built on this host.** The unsigned-install caveats below
+apply identically to this cut; the Linux archive carries no signature of any kind
+and the SHA-256 above is its only integrity check.
 
 Two findings in this release are worth reading before deploying it, because both
 changed a safety behaviour rather than adding a feature:
@@ -253,6 +295,12 @@ next cut.
 
 ## Reproducibility
 
+- **The builds are not bit-reproducible.** Packaging the same commit twice
+  produces artifacts of identical size but different SHA-256 — electron-builder
+  embeds build-time metadata. So a recorded hash identifies *one specific build*,
+  not "the build of this commit": re-cutting a release invalidates the hashes
+  already published for it. Record the hashes from the artifacts you actually
+  ship, and re-record them if you rebuild.
 - `package-lock.json` pins the dependency tree; CI uses `npm ci`.
 - `sbom.json` and per-OS `SHA256SUMS-<os>.txt` manifests accompany each release
   for verification.

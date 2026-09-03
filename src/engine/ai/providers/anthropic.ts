@@ -41,10 +41,14 @@ import type { ToolSpec } from '../tools.js';
  * thinking disabled — the operator set the single largest quality lever this app
  * has and got a non-reasoning turn, with nothing anywhere saying so.
  *
- * Fable and Mythos are listed explicitly rather than relying on
- * `claude-fable-5-1` happening to prefix-match `claude-fable-5`. Their thinking
- * is always on and an explicit `disabled` is rejected, so sending adaptive is
- * both correct and a no-op — but coverage should be stated, not incidental.
+ * Mythos had the same defect in a worse form: no entry prefix-matched any
+ * `claude-mythos-*` id, so those models received neither thinking nor effort.
+ *
+ * Matching is by id PREFIX (`startsWithAny` below), which is what lets one entry
+ * cover a family — `claude-fable-5` covers `claude-fable-5-1`, and
+ * `claude-mythos-5` covers `claude-mythos-5-1`. That is deliberate, but it means
+ * a genuinely new family name is invisible here until it is added: check this
+ * list when adding a model, because the failure is silent.
  */
 const ADAPTIVE_THINKING = [
   'claude-fable-5',

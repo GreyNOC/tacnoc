@@ -60,6 +60,18 @@ disclosure.
 
 ## Known limitations relevant to security
 
-See [THREAT_MODEL.md](THREAT_MODEL.md) — notably: at-rest encryption of the
-project DB/blobs is not yet implemented; the extension `vm` sandbox is not a
-hardened boundary; HTTP/2/3 interception is not implemented.
+See [THREAT_MODEL.md](THREAT_MODEL.md) — notably:
+
+- **At-rest encryption covers message *content*** (bodies, headers, WebSocket
+  payloads, AES-256-GCM under a per-project key in OS secure storage) but **not
+  operational metadata** — host, URL, method, status, MIME, timing, and tags stay
+  plaintext so history remains searchable. Project **exports are deliberately
+  plaintext**; treat them as sensitive.
+- **The extension sandbox is a separate child process** (scrubbed env, bounded
+  heap, IPC-only bridge) with an inner `vm`. That is a strong boundary but **not
+  a hardened OS sandbox** (no seccomp/AppContainer) — only load extensions you
+  trust.
+- **HTTP/3 / QUIC interception is not implemented.** HTTP/2 *is* intercepted, via
+  ALPN `h2` and translated to HTTP/1.1 upstream.
+- **The interception CA is trusted only where you install it.** The app never
+  modifies an OS trust store; installing and removing it is a manual step.

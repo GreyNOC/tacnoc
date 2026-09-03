@@ -117,7 +117,7 @@ Packaging and the release runbook (SBOM, checksums, signing decision, CI) are in
 
 ## What works today (v0.5.3)
 
-Implemented and covered by the automated suite (365 unit/integration tests plus
+Implemented and covered by the automated suite (368 unit/integration tests plus
 a real-Electron Playwright E2E suite: a smoke check, a full click-through, a
 packaged-artifact verification, the guided certificate setup, and the
 hunt-folder adoption path). Run `npm test` for the current count.

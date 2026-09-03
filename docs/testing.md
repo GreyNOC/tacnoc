@@ -56,7 +56,8 @@ uses a throwaway self-signed cert (`test/server/selfSignedCert.ts`).
 | End-to-end capture → scan → findings via the app facade | `session.test.ts` |
 | Extension SDK + process isolation (separate PID, no `process`/`require` in `vm`, same-id guard, rollback, fail-closed on child death, malformed-finding survival) | `sdk.test.ts` |
 | Real Electron app: boot, create project, proxy, all views | `e2e/smoke.spec.ts`, `e2e/full.spec.ts` |
-| Guided CA setup: optional/skippable, per-platform command, and success claimed **only** on proxy-decrypted HTTPS (a Repeater probe must not satisfy it) | `e2e/ca-setup.spec.ts` |
+| Guided CA setup: optional/skippable, and success claimed **only** on proxy-decrypted HTTPS (a Repeater probe must not satisfy it) | `e2e/ca-setup.spec.ts` |
+| CA install guide: per-platform install **and** removal command, narrowest-trust scope, path quoting | `qaqc-v053.test.ts` |
 | Emergency stop drops the intercept queue instead of forwarding it | `qaqc-v053.test.ts` |
 | Interception evidence excludes engine-generated HTTPS | `qaqc-v053.test.ts` |
 | AI provider capability coverage + typed API-failure messages + pre-run credential check | `anthropicProvider.test.ts` |

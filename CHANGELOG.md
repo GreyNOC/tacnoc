@@ -80,8 +80,14 @@ confirming it had worked.
   effort parameter but not adaptive thinking, and on that generation omitting
   the thinking field means the model does not reason at all — so choosing it for
   a role sent `effort: xhigh` to a non-reasoning turn while the UI showed the
-  lever at maximum. Fable and Mythos ids are now listed explicitly rather than
-  relying on an accidental prefix match.
+  lever at maximum.
+- **Mythos models got neither thinking nor effort.** No entry in the capability
+  lists prefix-matched any `claude-mythos-*` id, so a role set to one received no
+  `thinking` and no `output_config.effort` at all — the same silent failure as
+  Sonnet 4.6, from the same cause. `claude-mythos-5` is now listed for adaptive
+  thinking and effort; task budgets remain Fable/Opus/Sonnet only. Fable was
+  already covered and is unchanged apart from ordering, and matching is still by
+  id prefix, so `claude-fable-5-1` is covered by the `claude-fable-5` entry.
 - **"Test connection"** checks the key and the model id before a run exists. It
   counts tokens for a one-word prompt: it authenticates and resolves the model,
   generates nothing, and sends nothing at the target. Without it, a wrong key or
@@ -108,6 +114,29 @@ and the top bar draws its own minimise, maximise, and close.
   cleared (lockfile only). All three are build tooling — vite/postcss and
   electron-builder — and none reaches the shipped runtime, but the release gate
   audits the full tree.
+
+### Fixed — documentation that overstated what the code does
+
+Found by auditing every claim in the repo against the code during the release
+cut. This project's standard is "reproducible or it didn't happen", so a doc that
+claims a protection or a gate that does not exist is a defect, not a nit.
+
+- **`SECURITY.md` said at-rest encryption was "not yet implemented"** and that
+  "HTTP/2/3 interception is not implemented". Both were stale since v0.4.0:
+  content is AES-256-GCM encrypted at rest, and HTTP/2 *is* intercepted. Every
+  other document in the repo already said so. The known-limitations section now
+  states what is actually true, including what encryption does *not* cover.
+- **`docs/extension-sdk.md` claimed `sdkVersion` is checked against the host SDK
+  version.** Nothing reads that field — an extension declaring an incompatible
+  version loads without a warning. Documented as a declaration of intent, not the
+  compatibility gate it was described as.
+- **`RELEASE.md` claimed a bare `npm run dist` attempts AppImage and fails on
+  Windows.** It does not: electron-builder builds host-platform targets only, and
+  `release.yml` runs exactly that command on its Windows leg — so the file
+  contradicted its own CI instructions.
+- Corrected two claims in this changelog's own AI-harness section, and a coverage
+  row in `docs/testing.md` that credited an E2E spec with an assertion it does not
+  make.
 
 ## [0.5.2] — 2026-08-09
 

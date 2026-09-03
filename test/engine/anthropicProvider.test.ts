@@ -157,11 +157,32 @@ describe('model capability coverage', () => {
     'claude-sonnet-5',
     'claude-sonnet-4-6',
     'claude-fable-5',
+    // Covered by the `claude-fable-5` / `claude-mythos-5` entries via prefix
+    // match. Asserted so the family-covers-its-successors property is a tested
+    // guarantee rather than a happy accident of string ordering.
     'claude-fable-5-1',
+    'claude-mythos-5',
+    'claude-mythos-5-1',
   ])('asks %s to think, and passes the effort lever through', async (model) => {
     const body = await bodyFor(model);
     expect(body.thinking).toMatchObject({ type: 'adaptive' });
     expect(body.output_config).toMatchObject({ effort: 'xhigh' });
+  });
+
+  it('does not send a task budget to a model that has no task budgets', async () => {
+    // Mythos is covered for thinking and effort but NOT task budgets. Sending
+    // one would be a 400 on a model the operator deliberately selected.
+    const provider = new AnthropicProvider({ apiKey: 'sk-ant-not-a-real-key', baseUrl });
+    await provider.runAgent({
+      model: 'claude-mythos-5',
+      system: 'You are a test.',
+      messages: [{ role: 'user', content: 'go' }],
+      tools: [],
+      effort: 'high',
+      taskTokenBudget: 40_000,
+    });
+    expect(lastBody.output_config).toMatchObject({ effort: 'high' });
+    expect((lastBody.output_config as Record<string, unknown>).task_budget).toBeUndefined();
   });
 
   it('sends neither to a model that would reject them', async () => {
