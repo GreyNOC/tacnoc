@@ -82,15 +82,15 @@ test('scope rules are saved exactly as the form displays them, and a revoked CA 
   //
   // The main process refuses to write a 0-byte .crt for a revoked CA. That
   // rejection went nowhere: the button stayed enabled, the click raised an
-  // unhandled rejection, and the operator got no response at all.
+  // unhandled rejection, and the operator got no response at all. The setup
+  // guide now withholds the whole flow when there is no certificate, so the
+  // failing control is not merely disabled — it is not offered.
   await win.evaluate(async () => {
     await (window as unknown as { tacnoc: Bridge }).tacnoc.invoke('revokeCa', 'wiring regression');
   });
   await win.getByRole('button', { name: 'CA Certificate' }).click();
   await expect(win.getByText(/this project has no CA/i)).toBeVisible();
-
-  await win.getByRole('checkbox').first().check();
-  await expect(win.getByRole('button', { name: /Save CA certificate/ })).toBeDisabled();
+  await expect(win.getByRole('button', { name: /Save CA certificate/ })).toHaveCount(0);
   expect(await rejections()).toEqual([]);
 
   await app.close();
@@ -110,6 +110,9 @@ test('the CA view follows a rotation it did not initiate', async () => {
   }, projectDir);
 
   await win.getByRole('button', { name: 'CA Certificate' }).click();
+  // The fingerprint lives in the collapsed reference section: the guided steps
+  // are what a first-time operator needs, and a hex fingerprint is not.
+  await win.getByRole('button', { name: 'Show', exact: true }).click();
   const before = (await win
     .getByText(/^[0-9A-F]{2}(:[0-9A-F]{2})+$/i)
     .first()

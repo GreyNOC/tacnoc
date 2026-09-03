@@ -139,6 +139,57 @@ label {
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
 }
+
+/* Frameless window: this bar IS the title bar.
+   The drag region has to be opted OUT of by every interactive child, or the
+   controls sitting in it cannot be clicked at all. */
+.topbar.drag {
+  -webkit-app-region: drag;
+  /* Leave room for the macOS traffic lights, which float over the content.
+     Zero elsewhere: Windows and Linux draw their controls on the right. */
+  padding-left: 14px;
+}
+.topbar.drag button,
+.topbar.drag input,
+.topbar.drag select,
+.topbar.drag .chip,
+.topbar.drag .no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  /* Sit flush with the window edge, past the bar's own padding. */
+  margin-right: -14px;
+}
+.win-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+}
+.win-btn svg {
+  width: 10px;
+  height: 10px;
+}
+.win-btn:hover:not(:disabled) {
+  background: var(--bg-elev-2);
+  border-color: transparent;
+  color: var(--text);
+}
+.win-btn.close:hover:not(:disabled) {
+  background: var(--danger);
+  color: #fff;
+}
 .brand {
   display: flex;
   align-items: center;
@@ -498,6 +549,63 @@ pre.hex {
   margin: 8px 0;
   font-size: 12px;
 }
+.ok-box {
+  background: rgba(75, 209, 138, 0.12);
+  border: 1px solid var(--ok);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin: 8px 0;
+  font-size: 12px;
+}
+
+/* Guided setup steps (CA certificate) */
+.card.step {
+  border-left: 3px solid var(--border-strong);
+}
+.card.step.step-done {
+  border-left-color: var(--ok);
+}
+.card.step.step-pending {
+  opacity: 0.72;
+}
+.step-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+}
+.step-done .step-badge {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: var(--accent-text);
+}
+.command-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 7px 9px;
+  margin: 6px 0;
+}
+.command-row code {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--text);
+}
+
 .reveal-mask {
   filter: blur(5px);
   transition: filter 0.1s;

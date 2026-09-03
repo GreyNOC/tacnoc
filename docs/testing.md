@@ -56,6 +56,10 @@ uses a throwaway self-signed cert (`test/server/selfSignedCert.ts`).
 | End-to-end capture → scan → findings via the app facade | `session.test.ts` |
 | Extension SDK + process isolation (separate PID, no `process`/`require` in `vm`, same-id guard, rollback, fail-closed on child death, malformed-finding survival) | `sdk.test.ts` |
 | Real Electron app: boot, create project, proxy, all views | `e2e/smoke.spec.ts`, `e2e/full.spec.ts` |
+| Guided CA setup: optional/skippable, per-platform command, and success claimed **only** on proxy-decrypted HTTPS (a Repeater probe must not satisfy it) | `e2e/ca-setup.spec.ts` |
+| Emergency stop drops the intercept queue instead of forwarding it | `qaqc-v053.test.ts` |
+| Interception evidence excludes engine-generated HTTPS | `qaqc-v053.test.ts` |
+| AI provider capability coverage + typed API-failure messages + pre-run credential check | `anthropicProvider.test.ts` |
 | **Packaged** artifact: WASM SQLite from `app.asar.unpacked`, example extension from `resourcesPath`, extension child fork out of the packaged binary, loopback default | `e2e/packaged.spec.ts` (auto-skips without `dist/`; run after `npm run dist`) |
 
 ## Runtime parity (important)

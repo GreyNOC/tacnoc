@@ -7,6 +7,9 @@ headlessly; the shell wires it to a React UI over a narrow IPC boundary.
 ```
 ┌──────────────────────────── Electron ────────────────────────────┐
 │  Renderer (React/TS, sandboxed, contextIsolation)                 │
+│    The window is frameless: the app's top bar IS the title bar     │
+│    (macOS keeps native traffic lights; elsewhere the bar draws     │
+│     its own controls over the `window:*` IPC methods).             │
 │    window.tacnoc.invoke(method, …args)   ── tacnoc:invoke ──►   │
 │    window.tacnoc.onEvent(cb)             ◄── tacnoc:event  ──    │
 │                         │ preload (contextBridge, CJS)            │

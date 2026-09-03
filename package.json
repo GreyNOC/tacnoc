@@ -1,6 +1,6 @@
 {
   "name": "greynoc-tacnoc",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "TACNOC — an extensible web application security research suite for authorized testing.",
   "private": true,
   "type": "module",

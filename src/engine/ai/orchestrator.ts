@@ -57,7 +57,15 @@ const MAX_ROUNDS = 3;
  * together — an 8K ceiling at xhigh truncates the answer mid-sentence, which
  * reads as "the role had little to say" rather than as the truncation it is.
  */
-const ROLE_MAX_TOKENS_DEFAULT = 16_000;
+/**
+ * Every request streams, so the 10-minute non-streaming HTTP ceiling that once
+ * forced a small cap does not apply — the only thing a low ceiling buys now is
+ * truncation. 16K was shared between adaptive thinking and the answer, and the
+ * reporter (which writes a full engagement report at `high` effort) is exactly
+ * the role that ran out of it. The dedicated "this turn was cut off" step below
+ * exists because that kept happening.
+ */
+const ROLE_MAX_TOKENS_DEFAULT = 32_000;
 const ROLE_MAX_TOKENS_DEEP = 64_000;
 const MIN_TASK_BUDGET = 20_000; // SDK minimum for output_config.task_budget
 const MAX_ITERATIONS_PER_ROLE = 24; // hard cap on a single role's tool-call loop

@@ -258,7 +258,12 @@ export class ProxyServer {
   }
 
   async stop(): Promise<void> {
-    this.deps.interceptor.releaseAll();
+    // Drop, don't forward. Stopping the proxy is not consent to send whatever
+    // was still sitting in the intercept queue: the sockets are torn down
+    // immediately below, so a forwarded request reaches the target and its
+    // response is thrown away — traffic at the target with nothing to show for
+    // it, produced by the act of shutting down.
+    this.deps.interceptor.releaseAll('drop');
     // Force-terminate keep-alive/tunnel sockets so close() resolves promptly.
     this.server?.closeAllConnections?.();
     (this.mitm as unknown as { closeAllConnections?: () => void })?.closeAllConnections?.();

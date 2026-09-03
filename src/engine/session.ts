@@ -48,10 +48,18 @@ import type { Scheme } from '../shared/model.js';
 import type { TargetMap } from '../shared/target.js';
 import { buildTargetMap } from './target/siteMap.js';
 import { emptyScope } from '../shared/scope.js';
-import type { AiConfig, AiKeyStatus, MeshRun, MeshRunPlan, MeshRunProgress } from '../shared/ai.js';
-import { normalizeAiConfig } from '../shared/ai.js';
+import type {
+  AgentRole,
+  AiConfig,
+  AiKeyStatus,
+  MeshRun,
+  MeshRunPlan,
+  MeshRunProgress,
+} from '../shared/ai.js';
+import { defaultAiConfig, normalizeAiConfig } from '../shared/ai.js';
 import { MeshOrchestrator } from './ai/orchestrator.js';
 import { buildTools } from './ai/tools.js';
+import type { ProviderCheck } from './ai/provider.js';
 import { AnthropicProvider } from './ai/providers/anthropic.js';
 import type {
   CaRevocation,
@@ -418,14 +426,25 @@ export class TacnocSession extends EventEmitter {
     fingerprint: string;
     secureBackend: boolean;
     backendName: string;
+    interceptedHttpsExchanges: number;
+    proxyRunning: boolean;
+    proxyHost?: string;
+    proxyPort?: number;
   } {
     const project = this.requireProject();
     const backend = project.caKeyBackend;
+    const proxy = this.getProxyStatus();
     return {
       certPem: project.ca.certificatePem,
       fingerprint: project.ca.fingerprint,
       secureBackend: backend.secure,
       backendName: backend.name,
+      // Proxy-decrypted only. This number is what the setup guide reports as
+      // "it works", so it must not be satisfiable by engine-generated traffic.
+      interceptedHttpsExchanges: project.history.countInterceptedHttps(),
+      proxyRunning: proxy.running,
+      ...(proxy.host ? { proxyHost: proxy.host } : {}),
+      ...(proxy.port ? { proxyPort: proxy.port } : {}),
     };
   }
 
@@ -444,7 +463,11 @@ export class TacnocSession extends EventEmitter {
       secureBackend: backend.secure,
       backendName: backend.name,
       history: project.meta.getJson<CaRevocation[]>(CA_HISTORY_KEY) ?? [],
-      observedHttpsExchanges: project.history.countByScheme('https'),
+      // Proxy-decrypted only — see HistoryRepo.countInterceptedHttps. Repeater
+      // and Variation HTTPS never present the project's leaf certificate to a
+      // client, so counting them let one engine-generated probe report that
+      // interception worked over a browser that still refused every one.
+      observedHttpsExchanges: project.history.countInterceptedHttps(),
       installInstructions: caInstallInstructions(),
     };
   }
@@ -712,7 +735,11 @@ export class TacnocSession extends EventEmitter {
    */
   emergencyStop(): void {
     this.variation?.emergencyStopAll();
-    this.interceptor.releaseAll();
+    // DROP, not forward. A held request has not reached the target yet, so
+    // releasing the queue as `forward` made the one control whose entire job is
+    // "stop touching the target" deliver every queued request to it — while the
+    // UI said all automated work had been halted.
+    this.interceptor.releaseAll('drop');
     this.emit('emergency-stop');
     this.log.warn('EMERGENCY STOP invoked');
   }
@@ -943,9 +970,18 @@ export class TacnocSession extends EventEmitter {
     const profile = this.getEngagementProfile();
     const required = profile.userAgent.required.trim();
     const limit = Math.min(Math.max(Math.trunc(sampleSize), 1), 500);
-    const generated = project.history
-      .query({ limit, sort: 'desc' })
-      .rows.filter((ex) => ex.source === 'repeater' || ex.source === 'variation');
+    // Filter in SQL, per source, rather than taking the newest `limit` rows of
+    // ANY source and filtering after. The latter sampled a window that proxy
+    // traffic pushes generated traffic straight out of: browse a hundred pages
+    // and the sample became empty, at which point the compliance check reported
+    // "every generated request carries the required identity" on the strength of
+    // zero requests.
+    const generated = [
+      ...project.history.query({ limit, sort: 'desc', source: 'repeater' }).rows,
+      ...project.history.query({ limit, sort: 'desc', source: 'variation' }).rows,
+    ]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, limit);
 
     const observed = new Set<string>();
     const missingHeaders = new Set<string>();
@@ -1366,6 +1402,49 @@ export class TacnocSession extends EventEmitter {
 
   async clearAiApiKey(): Promise<void> {
     if (this.aiSecretStore) await this.aiSecretStore.delete(TacnocSession.AI_KEY);
+  }
+
+  /**
+   * Check the stored key and a role's model id against the provider, before any
+   * run exists.
+   *
+   * Generates nothing and sends nothing at the target — it counts tokens for a
+   * one-word prompt, which is enough to authenticate and resolve the model. The
+   * key is read here, main-side, and never crosses the IPC boundary; only the
+   * verdict does.
+   */
+  async checkAiProvider(role: AgentRole = 'recon'): Promise<ProviderCheck> {
+    const config = this.getAiConfig();
+    const model = config.roles[role]?.model ?? defaultAiConfig().roles[role].model;
+    if (!this.aiSecretStore) {
+      return {
+        ok: false,
+        model,
+        detail: 'No secret store is configured for AI keys on this install.',
+        remedy: 'Run the desktop app so the key can be sealed with OS secure storage.',
+      };
+    }
+    const key = await this.aiSecretStore.get(TacnocSession.AI_KEY);
+    if (key === null) {
+      return {
+        ok: false,
+        model,
+        detail: 'No Anthropic API key is configured.',
+        remedy: 'Add one under AI Mesh → Anthropic API key.',
+      };
+    }
+    const provider = new AnthropicProvider({
+      apiKey: key,
+      ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+    });
+    if (!provider.verify) {
+      return {
+        ok: false,
+        model,
+        detail: 'This provider cannot be checked without starting a run.',
+      };
+    }
+    return provider.verify(model);
   }
 
   /**

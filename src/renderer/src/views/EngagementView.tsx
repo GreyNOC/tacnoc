@@ -114,8 +114,16 @@ export function EngagementView(): JSX.Element {
       setProfile(stored);
       await refresh();
     } catch (err) {
-      // The engine refuses an invalid profile outright — surface exactly why.
+      // The engine refuses an invalid profile outright — surface exactly why,
+      // AND put the form back to what was actually stored. Leaving the optimistic
+      // value on screen showed a rejected change as saved: tick "enforce" with no
+      // User-Agent set and the box stayed ticked over an engine that had refused
+      // it, so the operator believed generated traffic was being identified.
       setToast(err instanceof Error ? err.message : String(err));
+      await api
+        .getEngagementProfile()
+        .then(setProfile)
+        .catch(() => undefined);
     }
   };
 

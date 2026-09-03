@@ -62,6 +62,17 @@ function createWindow(): void {
     minHeight: 600,
     backgroundColor: '#0d1117',
     title: 'TACNOC',
+    // Frameless: the app's own top bar IS the title bar, so the OS chrome is one
+    // less strip of vertical space between the operator and the traffic table.
+    //
+    // Split by platform on purpose. macOS keeps its native traffic lights
+    // (`hiddenInset` floats them over the content) because a Mac window without
+    // them is a window most people cannot close; Windows and Linux go fully
+    // frameless and the renderer draws its own minimise/maximise/close, wired
+    // through the `window:*` IPC methods.
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 14, y: 13 } }
+      : { frame: false }),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,

@@ -31,7 +31,11 @@ no proprietary code, UI, branding, or assets.
 - **Local CA, your trust decision** — TLS interception certificates are
   generated locally and the CA private key is stored in OS secure storage. The
   app never modifies your OS trust store; installing the CA is an explicit,
-  warned, manual step. See [docs/certificate-management.md](docs/certificate-management.md).
+  warned, manual step, and an **optional** one — HTTP is captured without it. A
+  guided setup gives you the exact command for your platform (and the removal
+  command beside it), then verifies interception from decrypted traffic rather
+  than from configuration. See
+  [docs/certificate-management.md](docs/certificate-management.md).
 - **No telemetry** — no analytics, no usage reporting, no update check, and no
   network sink for logs. The tool never phones home.
 - **One opt-in outbound path: the AI mesh.** TACNOC can drive an LLM to help
@@ -73,13 +77,15 @@ In the app:
 
 1. **Create a project** (choose a folder + name; optionally record an
    authorization reference).
-2. Open **CA Certificate**, read the warning, and **save the CA** to a file;
-   install it into the *browser/profile you will test with* (manual, per the
-   instructions shown).
-3. Click the **Proxy** chip in the top bar to start the loopback proxy.
-4. Point your browser at `http://127.0.0.1:8080`.
-5. Browse the local test server (below) or your authorized target — traffic
+2. Click the **Proxy** chip in the top bar to start the loopback proxy.
+3. Point your browser at `http://127.0.0.1:8080`.
+4. Browse the local test server (below) or your authorized target — traffic
    appears in **HTTP History**.
+5. To read HTTPS as well (optional), open **CA Certificate** and follow the four
+   guided steps: save the certificate, run the one command it gives you for your
+   platform, point the browser's HTTPS proxy at TACNOC too, and let it verify.
+   It confirms success from decrypted traffic, so it cannot tell you interception
+   works when it does not.
 6. Add your target to **Scope** before using **Variation**.
 
 ### Try it against the bundled safe test server
@@ -109,14 +115,16 @@ npm run checksums      # write dist/SHA256SUMS-<os>.txt
 Packaging and the release runbook (SBOM, checksums, signing decision, CI) are in
 [RELEASE.md](RELEASE.md); changes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
-## What works today (v0.5.1)
+## What works today (v0.5.3)
 
-Implemented and covered by the automated suite (331 unit/integration tests plus
+Implemented and covered by the automated suite (365 unit/integration tests plus
 a real-Electron Playwright E2E suite: a smoke check, a full click-through, a
-packaged-artifact verification, and the hunt-folder adoption path). Run `npm test` for the current count.
+packaged-artifact verification, the guided certificate setup, and the
+hunt-folder adoption path). Run `npm test` for the current count.
 
 - HTTP/1.1 proxying; HTTPS interception via CONNECT + per-host leaf certs signed
-  by the locally-generated project CA (verified with a real TLS handshake).
+  by the locally-generated project CA (verified with a real TLS handshake), with
+  an optional guided setup for trusting it.
 - **HTTP/2 interception** — the MITM negotiates ALPN `h2` and terminates HTTP/2,
   translating requests to HTTP/1.1 upstream so it works against any origin
   (verified with real h2 GET/POST through the proxy).

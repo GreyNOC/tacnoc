@@ -109,11 +109,58 @@ npm run release:prepare      # ci gate + full dependency audit + SBOM
 git tag vX.Y.Z && git push --tags   # triggers release.yml (drafts the release)
 ```
 
-### v0.5.2 — cut UNSIGNED (operator decision, 2026-08-09)
+### Tag record — correcting this file (2026-09-03)
 
-`v0.5.2` (the wiring QA/QC pass — see `CHANGELOG.md`) was built and tagged
-locally with **no code signing**, the same deliberate operator decision as every
-cut before it. `electron-builder` logs `signing with signtool.exe` during the
+Two of the entries below say a version "was built and tagged locally". **The tag
+part was not true.** `git tag` and `git ls-remote --tags origin` both list only
+`v0.4.0` and `v0.4.1`; `CHANGELOG.md` records ten versions. Everything from
+v0.4.2 through v0.5.2 was built and recorded here but never tagged, and since
+`release.yml` triggers on a `v*` tag, **no draft GitHub release was ever produced
+for any of them.** The artifacts and hashes below are still accurate for what was
+built locally — what was wrong is the claim that a tag existed.
+
+The entries are left in place rather than rewritten, with this correction above
+them, because the point of this file is an accurate record and quietly editing
+the history would defeat it.
+
+### v0.5.3 — cut UNSIGNED (operator decision, 2026-09-03)
+
+`v0.5.3` (the certificate-setup pass — see `CHANGELOG.md`) is built and tagged
+with **no code signing**, the same deliberate operator decision as every cut
+before it, and it is the first version since v0.4.1 to actually carry a tag.
+
+Gate: 365 unit/integration tests green, all 10 E2E specs green **including
+`packaged.spec.ts` against the binaries below**, full-tree `npm audit` clean
+(three build-tooling advisories — `browserslist`, `fast-uri`, `@xmldom/xmldom` —
+cleared in the lockfile; none reaches the shipped runtime), SBOM regenerated.
+`electron-builder` logs `signing with signtool.exe`; with no certificate
+configured nothing is applied, and `Get-AuthenticodeSignature` on both artifacts
+reports `NotSigned`. Verified rather than assumed. Windows x64:
+
+| Artifact | SHA-256 |
+|---|---|
+| `TACNOC-0.5.3-Portable-x64.exe` (portable) | `08ac4a7c2dd96a5243af90d129e5252999a823f7e2c885470fa859a4c1dacee8` |
+| `TACNOC-0.5.3-Setup-x64.exe` (NSIS) | `f1c8ac086e22d6a34a8ac44cc43835a4cd32aa4b15e11329dec8381294234ba3` |
+
+Manifest: `dist/SHA256SUMS-windows.txt`. macOS/Linux artifacts were not built on
+this host. The unsigned-install caveats below apply identically to this cut.
+
+Two findings in this release are worth reading before deploying it, because both
+changed a safety behaviour rather than adding a feature:
+
+- **Emergency stop and proxy shutdown now DROP held requests** instead of
+  forwarding them. If any local workflow depended on the queue being flushed to
+  the target on shutdown, it will not be any more — by design.
+- **The `ca-trust` preflight check counts proxy-decrypted HTTPS only.** A project
+  that previously reported "TLS interception is working" on the strength of
+  Repeater traffic will now correctly report that it is not.
+
+### v0.5.2 — built UNSIGNED, never tagged (operator decision, 2026-08-09)
+
+`v0.5.2` (the wiring QA/QC pass — see `CHANGELOG.md`) was built locally with **no
+code signing**, the same deliberate operator decision as every cut before it. It
+was **not** tagged — see the correction above.
+`electron-builder` logs `signing with signtool.exe` during the
 build; with no certificate configured nothing is applied, and
 `Get-AuthenticodeSignature` on the artifacts reports `NotSigned`. Verified rather
 than assumed.

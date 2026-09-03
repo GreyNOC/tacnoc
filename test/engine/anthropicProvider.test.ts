@@ -129,3 +129,110 @@ describe('the real provider talks to the API', () => {
     expect(lastBody.thinking).toMatchObject({ type: 'adaptive' });
   });
 });
+
+/**
+ * Capability coverage. Getting a model's thinking support wrong in the omitting
+ * direction is silent and expensive: on the 4.6 generation, no `thinking` field
+ * means the model does not reason at all — so a role set to `xhigh` effort
+ * quietly ran without thinking while the UI showed the lever at maximum.
+ */
+describe('model capability coverage', () => {
+  const bodyFor = async (model: string): Promise<Record<string, unknown>> => {
+    const provider = new AnthropicProvider({ apiKey: 'sk-ant-not-a-real-key', baseUrl });
+    await provider.runAgent({
+      model,
+      system: 'You are a test.',
+      messages: [{ role: 'user', content: 'go' }],
+      tools: [],
+      effort: 'xhigh',
+    });
+    return lastBody;
+  };
+
+  it.each([
+    'claude-opus-5',
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-opus-4-6',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'claude-fable-5',
+    'claude-fable-5-1',
+  ])('asks %s to think, and passes the effort lever through', async (model) => {
+    const body = await bodyFor(model);
+    expect(body.thinking).toMatchObject({ type: 'adaptive' });
+    expect(body.output_config).toMatchObject({ effort: 'xhigh' });
+  });
+
+  it('sends neither to a model that would reject them', async () => {
+    const body = await bodyFor('claude-haiku-4-5');
+    expect(body.thinking).toBeUndefined();
+    expect(body.output_config).toBeUndefined();
+  });
+});
+
+/**
+ * A failed call has to name the ONE thing to change. The four common failures
+ * — wrong key, no access, wrong model id, no network — are indistinguishable in
+ * the raw SDK message and lead to completely different fixes, and they surface
+ * mid-run in an error box with no other context.
+ */
+describe('API failures say what to fix', () => {
+  const failWith = (status: number, body: string) => {
+    server.removeAllListeners('request');
+    server.on('request', (_req, res) => {
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(body);
+    });
+  };
+
+  const provider = () =>
+    new AnthropicProvider({ apiKey: 'sk-ant-not-a-real-key', baseUrl, defaultMaxTokens: 1024 });
+
+  const turn = (model = 'claude-opus-5') =>
+    provider().runAgent({
+      model,
+      system: 'You are a test.',
+      messages: [{ role: 'user', content: 'go' }],
+      tools: [],
+    });
+
+  it('names the API key on a 401 rather than echoing the status', async () => {
+    failWith(401, '{"type":"error","error":{"type":"authentication_error","message":"invalid"}}');
+    await expect(turn()).rejects.toThrow(/API key/i);
+  });
+
+  it('names the model id on a 404', async () => {
+    failWith(404, '{"type":"error","error":{"type":"not_found_error","message":"no model"}}');
+    await expect(turn('claude-not-a-model')).rejects.toThrow(/model id "claude-not-a-model"/i);
+  });
+
+  it('names rate limiting on a 429', async () => {
+    failWith(429, '{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}');
+    await expect(turn()).rejects.toThrow(/rate limit/i);
+  }, 30000);
+
+  it('verify() proves the key and model without generating anything', async () => {
+    // count_tokens authenticates and resolves the model; it produces no output
+    // tokens and cannot touch the target.
+    let countPath = '';
+    server.removeAllListeners('request');
+    server.on('request', (req, res) => {
+      countPath = req.url ?? '';
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"input_tokens":7}');
+    });
+    const result = await provider().verify('claude-opus-5');
+    expect(result.ok).toBe(true);
+    expect(countPath).toContain('count_tokens');
+    expect(result.detail).toContain('claude-opus-5');
+  });
+
+  it('verify() reports a bad key as a fixable thing, not a stack trace', async () => {
+    failWith(401, '{"type":"error","error":{"type":"authentication_error","message":"invalid"}}');
+    const result = await provider().verify('claude-opus-5');
+    expect(result.ok).toBe(false);
+    expect(result.detail).toMatch(/API key/i);
+    expect(result.remedy).toBeTruthy();
+  });
+});

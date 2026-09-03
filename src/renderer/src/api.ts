@@ -1,6 +1,7 @@
 /** Typed wrapper around the preload bridge (window.tacnoc). */
 
-import type { AppEvent, ProxyStatusDto, CaInfoDto } from '@shared/ipc.js';
+import type { AppEvent, ProxyStatusDto, CaInfoDto, AiProviderCheckDto } from '@shared/ipc.js';
+import type { CaInstallGuide } from '@engine/ca/installInstructions.js';
 import type { ExchangeSummary, HistoryFilter, HistoryPage } from '@shared/query.js';
 import type { ExchangeDetail } from '@shared/detail.js';
 import type { WsMessage } from '@shared/websocket.js';
@@ -51,6 +52,13 @@ const b = (): Bridge => window.tacnoc;
 export const api = {
   onEvent: (h: (e: AppEvent) => void) => b().onEvent(h),
 
+  // window (frameless chrome)
+  windowMinimize: () => b().invoke<null>('window:minimize'),
+  windowToggleMaximize: () => b().invoke<boolean>('window:toggleMaximize'),
+  windowClose: () => b().invoke<null>('window:close'),
+  windowIsMaximized: () => b().invoke<boolean>('window:isMaximized'),
+  windowUsesCustomControls: () => b().invoke<boolean>('window:usesCustomControls'),
+
   // project
   pickDirectory: () => b().invoke<string | null>('pickDirectory'),
   createProject: (dir: string, name: string, authRef?: string) =>
@@ -76,6 +84,8 @@ export const api = {
   stopProxy: () => b().invoke<ProxyStatusDto>('stopProxy'),
   getProxyStatus: () => b().invoke<ProxyStatusDto>('getProxyStatus'),
   getCaInfo: () => b().invoke<CaInfoDto>('getCaInfo'),
+  getCaInstallGuide: (certPath?: string) =>
+    b().invoke<CaInstallGuide>('getCaInstallGuide', certPath),
   saveCaCertificate: () => b().invoke<string | null>('saveCaCertificate'),
   getCaStatus: () => b().invoke<CaStatus>('getCaStatus'),
   rotateCa: (reason: string) => b().invoke<CaStatus>('rotateCa', reason),
@@ -178,6 +188,7 @@ export const api = {
   setAiApiKey: (key: string) => b().invoke<void>('setAiApiKey', key),
   getAiKeyStatus: () => b().invoke<AiKeyStatus>('getAiKeyStatus'),
   clearAiApiKey: () => b().invoke<void>('clearAiApiKey'),
+  checkAiProvider: (role?: string) => b().invoke<AiProviderCheckDto>('checkAiProvider', role),
   startMeshRun: (plan: MeshRunPlan) => b().invoke<MeshRunProgress>('startMeshRun', plan),
   stopMeshRun: (id: string) => b().invoke<void>('stopMeshRun', id),
   getMeshRun: (id: string) => b().invoke<MeshRun | undefined>('getMeshRun', id),

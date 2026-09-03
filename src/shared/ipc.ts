@@ -36,6 +36,34 @@ export interface CaInfoDto {
   secureBackend: boolean;
   backendName: string;
   installInstructions: string;
+  /** Step-by-step, per-platform guidance for the guided setup. */
+  installGuide: import('../engine/ca/installInstructions.js').CaInstallGuide;
+  /**
+   * HTTPS exchanges decrypted at the proxy. The setup guide reports this as
+   * proof that the browser actually trusts the CA, so it counts proxy traffic
+   * only — engine-generated HTTPS proves nothing about interception.
+   */
+  interceptedHttpsExchanges: number;
+  proxyRunning: boolean;
+  proxyHost?: string;
+  proxyPort?: number;
+}
+
+/**
+ * Result of a live credential/model check against the configured AI provider.
+ *
+ * Exists so a bad key or a mistyped model id surfaces before a run starts,
+ * rather than as an opaque SDK error three roles deep — after the mesh has
+ * already spent tokens and possibly sent traffic at the target.
+ */
+export interface AiProviderCheckDto {
+  ok: boolean;
+  /** Plain-language outcome, safe to show verbatim. Never contains the key. */
+  detail: string;
+  /** The model id that was checked. */
+  model: string;
+  /** What to do about a failure, when we can say. */
+  remedy?: string;
 }
 
 /**
@@ -44,6 +72,13 @@ export interface CaInfoDto {
  * cannot be exposed here without an implementation (or vice versa).
  */
 export const INVOKE_METHODS = [
+  // Frameless-window controls: the renderer's top bar replaces the OS title bar
+  // on Windows and Linux and has to be able to drive the window itself.
+  'window:minimize',
+  'window:toggleMaximize',
+  'window:close',
+  'window:isMaximized',
+  'window:usesCustomControls',
   'pickDirectory',
   'createProject',
   'openProject',
@@ -57,6 +92,7 @@ export const INVOKE_METHODS = [
   'stopProxy',
   'getProxyStatus',
   'getCaInfo',
+  'getCaInstallGuide',
   'saveCaCertificate',
   'getCaStatus',
   'rotateCa',
@@ -123,6 +159,7 @@ export const INVOKE_METHODS = [
   'setAiApiKey',
   'getAiKeyStatus',
   'clearAiApiKey',
+  'checkAiProvider',
   'startMeshRun',
   'stopMeshRun',
   'getMeshRun',
