@@ -35,6 +35,29 @@ const SEVERITY_LABEL: Record<PreflightCheck['severity'], string> = {
 
 export function EngagementView(): JSX.Element {
   const setToast = useStore().setToast;
+
+  const [savingLogs, setSavingLogs] = useState(false);
+
+  const saveLogs = async (): Promise<void> => {
+    setSavingLogs(true);
+    try {
+      const res = await api.exportLogs();
+      // `null` means the save dialog was cancelled — not a failure.
+      if (!res) return;
+      setToast(
+        `Saved ${res.recordCount} log record(s)` +
+          (res.droppedCount
+            ? `; ${res.droppedCount} older record(s) had already been dropped`
+            : '') +
+          `. SHA-256 ${res.sha256.slice(0, 16)}…`,
+      );
+    } catch (err) {
+      setToast(`Could not save the logs: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSavingLogs(false);
+    }
+  };
+
   const [profile, setProfile] = useState<EngagementProfile>(defaultEngagementProfile());
   const [report, setReport] = useState<PreflightReport | undefined>(undefined);
   const [busy, setBusy] = useState(false);
@@ -584,6 +607,27 @@ export function EngagementView(): JSX.Element {
               </button>
             </div>
           ) : null}
+        </div>
+
+        {/* ---- diagnostics ---- */}
+        <div className="card">
+          <h3 style={{ marginTop: 0 }}>Diagnostics</h3>
+          <p style={{ fontSize: 12, opacity: 0.7 }}>
+            TACNOC keeps a bounded tail of its own structured log in memory. It is written nowhere
+            else: there is no log file, no telemetry, and nothing leaves this machine unless you
+            save it here and send it somewhere yourself. Records are redacted as they are written —
+            credentials, cookies and secret-shaped strings are masked before they reach the buffer,
+            not when you export.
+          </p>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="ghost" disabled={savingLogs} onClick={() => void saveLogs()}>
+              {savingLogs ? 'Saving…' : 'Download logs'}
+            </button>
+          </div>
+          <p style={{ fontSize: 12, opacity: 0.7 }}>
+            A per-target evidence bundle — exchanges, findings, audit rows and an agent handoff — is
+            exported from the Targets view, where you pick the host.
+          </p>
         </div>
 
         {/* ---- certificate lifecycle ---- */}

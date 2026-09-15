@@ -1,6 +1,13 @@
 /** Typed wrapper around the preload bridge (window.tacnoc). */
 
 import type { AppEvent, ProxyStatusDto, CaInfoDto, AiProviderCheckDto } from '@shared/ipc.js';
+import type {
+  AgentHandoff,
+  AgentHandoffResult,
+  EvidenceBundleOptions,
+  EvidenceBundleSummary,
+  LogExportSummary,
+} from '@shared/evidence.js';
 import type { CaInstallGuide } from '@engine/ca/installInstructions.js';
 import type { ExchangeSummary, HistoryFilter, HistoryPage } from '@shared/query.js';
 import type { ExchangeDetail } from '@shared/detail.js';
@@ -87,6 +94,16 @@ export const api = {
   getCaInstallGuide: (certPath?: string) =>
     b().invoke<CaInstallGuide>('getCaInstallGuide', certPath),
   saveCaCertificate: () => b().invoke<string | null>('saveCaCertificate'),
+
+  // Evidence bundles. `null` means the operator cancelled the save dialog —
+  // not a failure, and the caller must not report one.
+  exportTargetEvidence: (host: string, options?: EvidenceBundleOptions) =>
+    b().invoke<EvidenceBundleSummary | null>('exportTargetEvidence', host, options),
+  exportLogs: () => b().invoke<LogExportSummary | null>('exportLogs'),
+  previewTargetHandoff: (host: string, options?: EvidenceBundleOptions) =>
+    b().invoke<AgentHandoff>('previewTargetHandoff', host, options),
+  handoffTargetToMesh: (host: string, options?: EvidenceBundleOptions) =>
+    b().invoke<AgentHandoffResult>('handoffTargetToMesh', host, options),
   getCaStatus: () => b().invoke<CaStatus>('getCaStatus'),
   rotateCa: (reason: string) => b().invoke<CaStatus>('rotateCa', reason),
   revokeCa: (reason: string) => b().invoke<CaStatus>('revokeCa', reason),

@@ -113,7 +113,12 @@ export class Logger {
   }
 }
 
-function consoleSink(record: LogRecord): void {
+/**
+ * The default sink. Exported so a caller can tee it — `LogBuffer` keeps a tail
+ * for diagnostics export and must not take the terminal output away from
+ * anyone running the app from a shell.
+ */
+export function consoleSink(record: LogRecord): void {
   const line = JSON.stringify(record);
   if (record.level === 'error') console.error(line);
   else if (record.level === 'warn') console.warn(line);

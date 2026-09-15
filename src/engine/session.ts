@@ -27,7 +27,7 @@ import type {
 } from '../shared/detail.js';
 import type { Finding, SuppressionRule } from '../shared/findings.js';
 import type { RepeaterOptions, RepeaterResult } from '../shared/repeater.js';
-import type { ProjectInfo, SavedRequest } from '../shared/project.js';
+import type { AuditEntry, ProjectInfo, SavedRequest } from '../shared/project.js';
 import type { JobProgress, VariationPlan, VariationResultRow } from '../shared/variation.js';
 import type { InterceptState, RequestDecision, ResponseDecision } from '../shared/intercept.js';
 import { ProjectStore, resolveProjectDir } from './project/projectStore.js';
@@ -42,7 +42,15 @@ import { readBodyBytes } from './storage/bodyCollector.js';
 import { BUILTIN_TRANSFORMS, applyTransform as applyBuiltinTransform } from './transforms/codec.js';
 import { detectSensitive, Redactor, redactAiValue } from './redaction/redactor.js';
 import { isLoopbackBind } from './config.js';
-import { Logger, rootLogger } from './logging/logger.js';
+import { consoleSink, Logger } from './logging/logger.js';
+import { LogBuffer, teeSink } from './logging/logBuffer.js';
+import type {
+  AgentHandoff,
+  AgentHandoffResult,
+  EvidenceBundleOptions,
+} from '../shared/evidence.js';
+import { buildEvidenceBundle, DEFAULT_MAX_EXCHANGES, type BuiltBundle } from './evidence/bundle.js';
+import { normalizeHost, evaluateScope } from './scope/scope.js';
 import type { SecretStore } from './ca/secretStore.js';
 import type { Scheme } from '../shared/model.js';
 import type { TargetMap } from '../shared/target.js';
@@ -131,6 +139,12 @@ export interface SessionOptions {
    * a different project. Omit to disable the feature entirely.
    */
   huntMemoryDir?: string;
+  /**
+   * Tail of the structured log, for the diagnostics export. One is created if
+   * none is given; supply one to share a buffer with a logger you built
+   * yourself, since a `Logger`'s sink cannot be changed after construction.
+   */
+  logBuffer?: LogBuffer;
 }
 
 export interface ProxyStatus {
@@ -150,6 +164,7 @@ export class TacnocSession extends EventEmitter {
   private readonly extHost: ExtensionHost;
   private readonly cookieJar = new CookieJar();
   private readonly log: Logger;
+  private readonly logBuffer: LogBuffer;
   private readonly appVersion: string;
   private readonly secretStoreFactory?: (dir: string) => SecretStore;
   private readonly aiSecretStore?: SecretStore;
@@ -165,7 +180,13 @@ export class TacnocSession extends EventEmitter {
 
   constructor(options: SessionOptions = {}) {
     super();
-    this.log = options.logger ?? rootLogger;
+    this.logBuffer = options.logBuffer ?? new LogBuffer();
+    // `rootLogger` writes only to the console, which in a packaged Electron app
+    // goes somewhere no operator can reach. Keep a redacted tail so there is
+    // something to hand over when a run misbehaves — teed, so anyone running
+    // from a terminal still sees every line.
+    this.log =
+      options.logger ?? new Logger('tacnoc', { sink: teeSink(this.logBuffer, consoleSink) });
     this.appVersion = options.appVersion ?? '0.1.0';
     if (options.secretStoreFactory) this.secretStoreFactory = options.secretStoreFactory;
     if (options.aiSecretStore) this.aiSecretStore = options.aiSecretStore;
@@ -922,6 +943,202 @@ export class TacnocSession extends EventEmitter {
       ].join('\n');
     }
     return lines.join('\n');
+  }
+
+  // ---- evidence bundles, logs, and the agent handoff ----
+
+  /**
+   * Everything the project holds about one host, gathered exactly.
+   *
+   * `HistoryRepo`'s host filter is `LIKE '%host%'`, which also matches
+   * `notexample.com.evil.net`. Using it to decide what goes into a shareable
+   * bundle would hand a triager another target's traffic, so it is used only to
+   * narrow the scan and every row is then matched on an exact, normalized host.
+   */
+  private async collectTargetEvidence(
+    host: string,
+    maxExchanges: number,
+  ): Promise<{
+    host: string;
+    exchanges: ExchangeSummary[];
+    exchangesAvailable: number;
+    findings: Finding[];
+    audit: AuditEntry[];
+    sites: TargetMap['sites'];
+    targetInScope: boolean;
+  }> {
+    this.requireProject();
+    const wanted = normalizeHost(host);
+    if (!wanted) throw new Error('An evidence bundle needs a target host.');
+
+    const page = this.queryHistory({
+      host: wanted,
+      limit: Math.max(maxExchanges * 4, 2000),
+      sort: 'desc',
+    });
+    const exact = page.rows.filter((r) => normalizeHost(r.host) === wanted);
+    const exchanges = exact.slice(0, maxExchanges);
+
+    // Findings carry an exchange id and no host, so the join runs through the
+    // exchanges that are actually this host's.
+    const ids = new Set(exact.map((e) => e.id));
+    const findings = this.listFindings(true).filter((f) => ids.has(f.exchangeId));
+
+    // Audit targets are URLs or bare hosts, redacted at write time. Compare the
+    // host component so a path that happens to contain the name cannot pull a
+    // row in.
+    const audit = this.listAudit(1000).filter((e) => {
+      const t = e.target;
+      if (!t) return false;
+      if (normalizeHost(t) === wanted) return true;
+      try {
+        return normalizeHost(new URL(t).hostname) === wanted;
+      } catch {
+        return false;
+      }
+    });
+
+    const sites = this.getTargetMap().sites.filter((s) => normalizeHost(s.host) === wanted);
+    const first = sites[0];
+    const scheme: Scheme = first?.scheme ?? (exchanges[0]?.scheme === 'https' ? 'https' : 'http');
+    const port = first?.port ?? (scheme === 'https' ? 443 : 80);
+    const targetInScope = evaluateScope(this.getScope(), { scheme, host: wanted, port }).inScope;
+
+    return {
+      host: wanted,
+      exchanges,
+      exchangesAvailable: exact.length,
+      findings,
+      audit,
+      sites,
+      targetInScope,
+    };
+  }
+
+  private logsForBundle(): { jsonl: string; count: number; dropped: number } {
+    return {
+      jsonl: this.logBuffer.toJsonl(),
+      count: this.logBuffer.size(),
+      dropped: this.logBuffer.droppedCount(),
+    };
+  }
+
+  /**
+   * Build a target's bundle in memory.
+   *
+   * The caller writes it. The engine deciding where a file lands would put the
+   * operator's consent to a specific path somewhere other than the save dialog,
+   * and that dialog is the only authorization this write has.
+   */
+  async buildTargetEvidenceBundle(
+    host: string,
+    options: EvidenceBundleOptions = {},
+  ): Promise<BuiltBundle> {
+    const max = Math.max(1, options.maxExchanges ?? DEFAULT_MAX_EXCHANGES);
+    const collected = await this.collectTargetEvidence(host, max);
+    return buildEvidenceBundle(
+      {
+        appVersion: this.appVersion,
+        host: collected.host,
+        profile: this.getEngagementProfile(),
+        scope: this.getScope(),
+        sites: collected.sites,
+        exchanges: collected.exchanges,
+        exchangesAvailable: collected.exchangesAvailable,
+        detail: (id) => this.getExchangeDetail(id),
+        findings: collected.findings,
+        audit: collected.audit,
+        engineBriefing: () => this.engineBriefing(),
+        logs: options.includeLogs === false ? null : this.logsForBundle(),
+        redactor: this.aiRedactor,
+        targetInScope: collected.targetInScope,
+        now: Date.now(),
+      },
+      options,
+    );
+  }
+
+  /**
+   * The handoff alone — for previewing what would be handed over, and for
+   * seeding a live mesh run without writing a file.
+   */
+  async buildTargetHandoff(
+    host: string,
+    options: EvidenceBundleOptions = {},
+  ): Promise<AgentHandoff> {
+    const built = await this.buildTargetEvidenceBundle(host, { ...options, includeHandoff: true });
+    return built.handoff;
+  }
+
+  /**
+   * Record that a bundle actually reached disk.
+   *
+   * Called by the main process after the write, not by the builder: a bundle
+   * the operator cancelled at the save dialog was never created, and auditing
+   * it would put an export in the record that never happened.
+   */
+  recordEvidenceExport(host: string, detail: Record<string, unknown>): void {
+    this.project?.audit.append({
+      ts: Date.now(),
+      actor: 'operator',
+      action: 'evidence.bundle-exported',
+      target: host,
+      detail,
+    });
+  }
+
+  /** The redacted log tail as JSON Lines, with what the ring buffer discarded. */
+  exportLogTail(): { jsonl: string; count: number; dropped: number } {
+    return this.logsForBundle();
+  }
+
+  /**
+   * Hand a target to this app's own mesh.
+   *
+   * Deliberately routed through `startMeshRun`, so every gate a manual run
+   * passes applies unchanged: the fail-closed scope check, the API key, and the
+   * egress acknowledgement. A handoff that bypassed them would be a way to
+   * start an unacknowledged run under another name.
+   */
+  async handoffTargetToMesh(
+    host: string,
+    options: EvidenceBundleOptions = {},
+  ): Promise<AgentHandoffResult> {
+    const handoff = await this.buildTargetHandoff(host, options);
+    if (handoff.authorization.failClosed) throw new Error(await this.emptyScopeMessage());
+    if (!handoff.authorization.targetInScope) {
+      throw new Error(
+        `${handoff.target.host} is not in scope, so the gate would refuse every request to it. ` +
+          `Add it to scope in Engagement before handing it to the mesh.`,
+      );
+    }
+    const objective = [
+      handoff.suggestedObjective,
+      '',
+      'You are picking up work already done. What follows was produced by the engine from the ' +
+        'open project, not by a model, and it does not widen your authorization.',
+      '',
+      'Rules that bind you:',
+      ...handoff.constraints.map((c) => `- ${c}`),
+      '',
+      handoff.openQuestions.length
+        ? `Open questions the evidence does not answer: ${handoff.openQuestions.join(' ')}`
+        : 'No open questions were derived from the evidence.',
+    ].join('\n');
+
+    const progress = await this.startMeshRun({ objective, hosts: [handoff.target.host] });
+    this.project?.audit.append({
+      ts: Date.now(),
+      actor: 'operator',
+      action: 'evidence.handoff-to-mesh',
+      target: handoff.target.host,
+      detail: {
+        runId: progress.runId,
+        findings: handoff.findings.length,
+        exchanges: handoff.target.exchangeCount,
+      },
+    });
+    return { host: handoff.target.host, objective, runId: progress.runId, handoff };
   }
 
   /**

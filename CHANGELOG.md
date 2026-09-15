@@ -6,7 +6,47 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added — evidence bundles, diagnostic logs, and an agent handoff
+
+- **Export one target's evidence as a ZIP** (Targets → Export evidence): every
+  captured exchange for that host as request/response text, the passive findings
+  highest-severity-first, the audit rows that touch it, the engagement profile
+  and the scope rules in force, and a `manifest.json` hashing every file. The
+  bundle's own SHA-256 is reported when it is written. It is read back and
+  CRC-checked before the app reports success, so an archive that cannot be
+  opened fails here rather than on a triager's desk.
+- **Redacted by default.** Headers, bodies and URLs go through the same
+  `Redactor` that protects logs and findings. Raw captures are an explicit
+  opt-in, named `…-RAW.zip`, announced in the README, the handoff and the
+  manifest, and written to the audit log as such. Nothing from the secret store
+  — CA private key, project DEK, provider API key — can reach a bundle.
+- **Exact host matching.** `HistoryRepo`'s host filter is `LIKE '%host%'`, so
+  `acme-corp.test` also matches `notacme-corp.test.evil.example`. Building a
+  shareable bundle on that would hand one program's traffic to another program's
+  triager. The filter now only narrows the scan; rows are matched on an exact
+  normalized host and the builder re-checks independently.
+- **An agent handoff**, in the bundle as `HANDOFF.md` + `handoff.json` and as a
+  live hand-off to the in-app mesh (Targets → Hand to mesh). It carries the
+  authorization, the scope the engine enforces, the endpoint map, the findings
+  with a pointer to the exchange file evidencing each, what the audit log says
+  was already tried, open questions derived from the evidence, and a starting
+  objective. It is assembled by pure functions — **no model writes any of it**,
+  so it cannot claim a finding the scanner did not produce. It is reported
+  authorization, never granted: a handoff leads with a STOP CONDITION when scope
+  is empty or the target is out of scope, and the live hand-off routes through
+  `startMeshRun` so the scope gate, the API key and the egress acknowledgement
+  all still apply.
+- **Download the diagnostic log** (Engagement → Diagnostics). There was nothing
+  to download before: `Logger`'s only sink was the console, which in a packaged
+  Electron app goes nowhere an operator can reach. The session now keeps a
+  bounded in-memory tail (5000 records) — a ring buffer rather than a file on
+  purpose, since a log file would be a second copy of sensitive engagement data
+  that outlives the project it describes. Records are redacted before they reach
+  the buffer, and an export says how many older records had already been
+  dropped so a tail is never mistaken for a complete log.
+- The ZIP writer is ours (`src/engine/evidence/zip.ts`): store + deflate over
+  `node:zlib`, no new runtime dependency. Tests extract bundles with an
+  extractor this project did not write.
 
 ## [0.5.7] — 2026-09-15
 
