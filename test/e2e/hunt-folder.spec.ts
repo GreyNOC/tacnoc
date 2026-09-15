@@ -34,9 +34,14 @@ const ENGAGEMENT = [
 ].join('\n');
 
 test('a project nested in a hunt folder opens, and its scope is found', async () => {
-  const hunt = path.join(os.tmpdir(), `tacnoc-hunt-${Date.now()}`, 'AcmeCorp');
+  const huntPath = path.join(os.tmpdir(), `tacnoc-hunt-${Date.now()}`, 'AcmeCorp');
+  await fs.mkdir(huntPath, { recursive: true });
+  // `os.tmpdir()` on macOS is `/var/folders/…`, a symlink to `/private/var/folders/…`.
+  // Every workspace path the engine reports has been through `fs.realpath`, so a
+  // temp path compared to one of them must be resolved too — otherwise the two
+  // name the same directory and differ as strings, on macOS and nowhere else.
+  const hunt = await fs.realpath(huntPath);
   const projectDir = path.join(hunt, 'Acme.tacnocproj');
-  await fs.mkdir(hunt, { recursive: true });
   await fs.writeFile(path.join(hunt, 'ENGAGEMENT.md'), ENGAGEMENT, 'utf8');
 
   const app = await electron.launch({ args: [path.join(root, 'out/main/index.js')] });
@@ -109,8 +114,13 @@ test('a project nested in a hunt folder opens, and its scope is found', async ()
 
 test('a folder that predates TACNOC is adopted, read, and ranked', async () => {
   // No project in this folder — only the material an operator already had.
-  const hunt = path.join(os.tmpdir(), `tacnoc-adopt-${Date.now()}`, 'AcmeCorp');
-  await fs.mkdir(path.join(hunt, 'recon'), { recursive: true });
+  const huntPath = path.join(os.tmpdir(), `tacnoc-adopt-${Date.now()}`, 'AcmeCorp');
+  await fs.mkdir(path.join(huntPath, 'recon'), { recursive: true });
+  // `os.tmpdir()` on macOS is `/var/folders/…`, a symlink to `/private/var/folders/…`.
+  // Every workspace path the engine reports has been through `fs.realpath`, so a
+  // temp path compared to one of them must be resolved too — otherwise the two
+  // name the same directory and differ as strings, on macOS and nowhere else.
+  const hunt = await fs.realpath(huntPath);
   await fs.writeFile(path.join(hunt, 'ENGAGEMENT.md'), ENGAGEMENT, 'utf8');
   await fs.writeFile(
     path.join(hunt, 'recon', 'subdomains.txt'),

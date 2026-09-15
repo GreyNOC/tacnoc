@@ -8,6 +8,38 @@ All notable changes to TACNOC are documented here. The format follows
 
 _Nothing yet._
 
+## [0.5.4] — 2026-09-15
+
+### Fixed — the v0.5.3 release never built
+
+- **The release gate failed on macOS, so no v0.5.3 artifacts were ever
+  produced.** `release.yml` on the `v0.5.3` tag failed its quality-gate step on
+  `macos-latest`, fail-fast cancelled the Windows and Linux legs, and the
+  draft-release job never ran. The failure was in the tests, not the engine:
+  `os.tmpdir()` on macOS is `/var/folders/…`, a symlink to
+  `/private/var/folders/…`, and the engine resolves every workspace path
+  through `fs.realpath` — so `huntFolderLayout.test.ts` compared
+  `/private/var/…` against `/var/…`, two spellings of one directory, and failed
+  on the one OS where they differ. Every test that derives paths from a temp
+  directory now resolves that directory at creation, so the comparison is
+  canonical-to-canonical everywhere. `hunt-folder.spec.ts` (E2E, which the
+  release matrix also runs on macOS) carried the same latent mismatch and is
+  fixed the same way.
+- **v0.5.3 was tagged on a branch that never reached `master`.** The tag and
+  its record sat on `claude/ca-setup-guide-qaqc`; `master` stayed at 0.5.2,
+  itself never tagged. The branch is merged (a fast-forward — nothing diverged)
+  and this version is cut from `master`, so the default branch, the tag, and the
+  record line up again. The `v0.5.3` tag stays where it is — it was published —
+  and marks a version that has no artifacts.
+
+### Changed
+
+- This is the first cut to carry the corrections made after the `v0.5.3` tag:
+  the `SECURITY.md`, `RELEASE.md`, `docs/extension-sdk.md` and `docs/testing.md`
+  claims that did not match the code, the `package-linux.mjs` executable name,
+  and the Mythos thinking/effort coverage note. No shipped behaviour differs
+  from what `v0.5.3` would have built.
+
 ## [0.5.3] — 2026-09-03
 
 ### Added — the certificate step, guided and optional

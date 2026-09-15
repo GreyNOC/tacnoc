@@ -52,7 +52,11 @@ const newSession = (): TacnocSession =>
   });
 
 beforeEach(async () => {
-  root = await fs.mkdtemp(path.join(os.tmpdir(), 'tacnoc-layout-'));
+  // `os.tmpdir()` on macOS is `/var/folders/…`, a symlink to `/private/var/folders/…`.
+  // Every workspace path the engine reports has been through `fs.realpath`, so a
+  // temp path compared to one of them must be resolved too — otherwise the two
+  // name the same directory and differ as strings, on macOS and nowhere else.
+  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tacnoc-layout-')));
   hunt = path.join(root, 'AcmeCorp');
   projectDir = path.join(hunt, 'Acme.tacnocproj');
   await fs.mkdir(hunt, { recursive: true });

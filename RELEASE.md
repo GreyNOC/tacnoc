@@ -139,6 +139,68 @@ The entries are left in place rather than rewritten, with this correction above
 them, because the point of this file is an accurate record and quietly editing
 the history would defeat it.
 
+### Tag record — second correction (2026-09-15)
+
+The 2026-09-03 correction above was itself incomplete, and the release it
+described did not happen:
+
+- **`v0.5.3` never produced artifacts.** The `release.yml` run on that tag
+  failed its quality-gate step on `macos-latest`: `huntFolderLayout.test.ts`
+  compared a `/private/var/…` path the engine had resolved through `fs.realpath`
+  against the `/var/…` spelling `os.tmpdir()` returns, and only macOS puts a
+  symlink between the two. Fail-fast cancelled the Windows and Linux legs and
+  `draft-release` never ran. The local artifacts and hashes in the v0.5.3 record
+  are real, the tag exists, and nothing was ever attached to a release. The tag
+  is left where it is because it was published.
+- **`v0.5.3` was tagged off `master`.** The tag and its record sat on
+  `claude/ca-setup-guide-qaqc`, two commits ahead of a `master` that stayed at
+  0.5.2 — a version that was itself never tagged. The branch fast-forwarded onto
+  `master`; nothing had diverged.
+- **Six tags existed only in this workstation's clone.** `v0.1.0`, `v0.2.0`,
+  `v0.4.2`, `v0.4.3`, `v0.5.0` and `v0.5.1` were created here — annotated tags
+  dated July and August — and never pushed;
+  the 2026-09-03 correction was written from a checkout that did not have them.
+  They are pushed after the v0.5.4 run completes, and each push triggers
+  `release.yml` against a commit that cannot pass it — v0.4.2 through v0.5.1
+  predate `.gitattributes` and die on Windows `format:check`, all six predate
+  the macOS fix, and v0.1.0/v0.2.0 are older still — so expect a failed Release
+  run on every one of those tags. They are the record, not releases. `v0.5.2` is
+  tagged retroactively at `3599afa`, the `master` commit whose `package.json`
+  says 0.5.2, on the same reasoning.
+
+### v0.5.4 — cut UNSIGNED, built by CI (operator decision, 2026-09-15)
+
+`v0.5.4` is the v0.5.3 work plus the fixes that let it actually build, cut from
+`master` and tagged on the merge commit — the "re-tag on the merge commit" the
+v0.5.3 record asks for, done as a new version rather than by moving a published
+tag. No shipped behaviour differs from what v0.5.3 would have built (see
+`CHANGELOG.md`).
+
+Gate, run on this workstation before tagging: `npm run ci` green (format, lint,
+typecheck, 28 test files / 368 tests). Full-tree `npm audit` reports **0
+vulnerabilities at every level** after two lockfile-only bumps — `js-yaml`
+4.3.1 → 4.3.2 (high, GHSA-2883-xcg3-v3hh; reached only through
+`electron-builder` and `eslint`) and `vitest`/`@vitest/coverage-v8` 4.1.10 →
+4.1.11 (moderate, GHSA-82fw-gwwq-j7x9; the test runner) — neither is in the
+shipped runtime, whose ten SBOM components are unchanged; `sbom.json`
+regenerated. `npm run test:e2e` on this workstation: all 10 specs green in the
+real Electron runtime, including `hunt-folder.spec.ts` as changed. Note that
+`packaged.spec.ts` ran here against the `dist/` already on disk — the v0.5.2
+local build; nothing was packaged for 0.5.4 on this host — so the packaged-path
+check against the 0.5.4 binaries is the one the release matrix performs.
+
+The macOS failure could not be reproduced here. Windows needs Developer Mode to
+create a directory symlink (`EPERM` without it), and a directory junction is not
+resolved by Node's `fs.realpath`, so the string split that fails on macOS cannot
+be manufactured on this host. The fix is verified by the `macos-latest` leg of
+the release run below — the only place the defect ever showed.
+
+Artifacts are built by `release.yml` on the tag, on all three runners, with
+`packaged.spec.ts` run against each packaged binary before `draft-release`. They
+are UNSIGNED — no signing secrets are configured, the same operator decision as
+every cut before — and the release is a draft. The run, the artifacts, and their
+SHA-256 manifests are recorded here once it completes.
+
 ### v0.5.3 — cut UNSIGNED (operator decision, 2026-09-03)
 
 `v0.5.3` (the certificate-setup pass — see `CHANGELOG.md`) is built and tagged

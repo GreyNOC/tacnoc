@@ -80,6 +80,12 @@ tests keep verifying exactly what ships.) See
 - Force-close servers/sockets in `afterAll` (`closeAllConnections()` + destroy
   upgraded sockets) so suites don't hang on keep-alive/tunnels.
 - Cover a happy path, a hostile/malformed input, and any safety control touched.
+- Resolve a temp directory with `fs.realpath` before comparing anything the
+  engine reports against paths derived from it. The engine canonicalises every
+  workspace path; on macOS `os.tmpdir()` is `/var/folders/…`, a symlink to
+  `/private/var/folders/…`, so an unresolved temp path names the same directory
+  and fails the comparison there and nowhere else — which is how the v0.5.3
+  release gate died on `macos-latest`.
 
 ## Packaging note
 

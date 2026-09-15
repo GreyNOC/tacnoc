@@ -38,7 +38,8 @@ let root = '';
 let outside = '';
 
 beforeEach(async () => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'tacnoc-ws-'));
+  // Resolved for the same reason as in huntFolderLayout.test.ts: macOS tmpdir is a symlink.
+  const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tacnoc-ws-')));
   root = path.join(base, 'engagement');
   outside = path.join(base, 'outside');
   await fs.mkdir(root, { recursive: true });
@@ -310,7 +311,7 @@ describe('engagement identity', () => {
 
 describe('certificate lifecycle', () => {
   it('reports status, rotates to fresh material, and revokes interception', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tacnoc-ca-'));
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tacnoc-ca-')));
     const certPath = path.join(dir, 'ca.pem');
     const secrets = new InMemorySecretStore();
     const ca = await CertificateAuthority.loadOrCreate(certPath, secrets);
