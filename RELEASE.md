@@ -256,8 +256,35 @@ behaviour changed.
 Gate on this workstation: `npm run ci` green, `npm run test:e2e` 10/10 in the
 real Electron runtime, full-tree `npm audit` 0 at every level, SBOM regenerated.
 The previously-failing test measured **86,034 ms on CI Windows → 249 ms here**
-after batching. The run, the artifacts, and their SHA-256 manifests are recorded
-below once it completes.
+after batching.
+
+**That fix worked, and this release still produced no artifacts.** Run
+`35022131106`: Windows failed the quality gate again, on a different test —
+`ca.test.ts`'s real-TLS-handshake case — and intermittently, since the same
+commit's PR run had passed on `windows-latest` minutes earlier. Reproduced
+locally at roughly 1 run in 25. Fixed in v0.5.7. The `v0.5.6` tag stays where it
+is, and marks a fourth version with no artifacts.
+
+### v0.5.7 — cut UNSIGNED, built by CI (operator decision, 2026-09-15)
+
+`v0.5.7` moves that handshake off loopback TCP and onto a named pipe (Unix
+socket off Windows), removing the ephemeral-port churn the test was
+inadvertently exercising. Same certificates, same SNI, same verification — no
+port to recycle. No application code changed.
+
+Evidence, gathered before changing anything rather than after: 199 of 200
+handshakes verified over TCP (the one failure a socket disconnect, chain
+intact); 60 of 60 with freshly minted CAs in isolation; and a direct check
+refuting port hijacking, since Windows returns `EADDRINUSE` for a second bind
+with or without `exclusive: true`. After the change, 60 consecutive runs passed.
+At the observed TCP failure rate a clean run of 60 would happen by chance about
+9% of the time, so the mechanism — no port, no `TIME_WAIT` — is the argument,
+and the 60 runs are corroboration rather than proof.
+
+Gate on this workstation: `npm run ci` green, `npm run test:e2e` 10/10 in the
+real Electron runtime, full-tree `npm audit` 0 at every level, SBOM regenerated.
+The run, the artifacts, and their SHA-256 manifests are recorded below once it
+completes.
 
 ### v0.5.3 — cut UNSIGNED (operator decision, 2026-09-03)
 

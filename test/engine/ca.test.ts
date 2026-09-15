@@ -46,12 +46,30 @@ describe('CertificateAuthority', () => {
         socket.end('ok');
       },
     );
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const port = (server.address() as { port: number }).port;
+
+    // A pipe, not a loopback TCP port.
+    //
+    // This is the same real handshake either way — same certificates, same SNI,
+    // same verification against the CA. Over TCP it was also a test of the OS
+    // ephemeral-port pool, and it lost: about 1 run in 25 failed with a
+    // transient socket error while the certificates themselves were fine. Two
+    // probes established that: 199 of 200 handshakes verified (the one failure
+    // being the client socket disconnecting mid-handshake, not a bad chain),
+    // and 60 of 60 verified against freshly minted CAs. It failed the v0.5.6
+    // release on Windows, where the gate had only just started running.
+    //
+    // A pipe has no port to recycle and nothing in TIME_WAIT.
+    const unique = `${process.pid}-${Date.now()}`;
+    const pipe =
+      process.platform === 'win32'
+        ? '\\\\.\\pipe\\tacnoc-ca-' + unique
+        : path.join(tmpDir, 'ca-' + unique + '.sock');
+    await fs.mkdir(tmpDir, { recursive: true });
+    await new Promise<void>((resolve) => server.listen(pipe, resolve));
 
     const authorized = await new Promise<boolean>((resolve, reject) => {
       const client = tls.connect(
-        { host: '127.0.0.1', port, servername: 'example.test', ca: ca.certificatePem },
+        { path: pipe, servername: 'example.test', ca: ca.certificatePem },
         () => {
           const ok = client.authorized;
           client.end();
