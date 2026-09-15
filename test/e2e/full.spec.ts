@@ -62,7 +62,9 @@ test('end-to-end: proxy capture, findings, and all views render with real data',
   }, projectDir);
 
   // App should have transitioned from the welcome screen to the workspace.
-  await expect(win.getByRole('button', { name: 'HTTP History' })).toBeVisible({ timeout: 15000 });
+  await expect(win.getByRole('button', { name: 'HTTP History', exact: true })).toBeVisible({
+    timeout: 15000,
+  });
 
   // 2) Make real proxied HTTPS traffic through the app's MITM proxy.
   const res = await httpsThroughProxy(
@@ -78,7 +80,7 @@ test('end-to-end: proxy capture, findings, and all views render with real data',
   expect(res.status).toBe(200);
 
   // 3) History view shows the captured exchange; selecting it shows the inspector.
-  await win.getByRole('button', { name: 'HTTP History' }).click();
+  await win.getByRole('button', { name: 'HTTP History', exact: true }).click();
   await expect(win.getByText('/missing-headers').first()).toBeVisible({ timeout: 15000 });
   await win.getByText('/missing-headers').first().click();
   await expect(win.getByText('Send to Repeater →')).toBeVisible();
@@ -96,7 +98,7 @@ test('end-to-end: proxy capture, findings, and all views render with real data',
   });
 
   // 5) Scope view renders the rule we added.
-  await win.getByRole('button', { name: 'Scope' }).click();
+  await win.getByRole('button', { name: 'Scope', exact: true }).click();
   await expect(win.getByRole('heading', { name: 'Include rules' })).toBeVisible();
   await expect(win.getByText('localhost').first()).toBeVisible();
 
@@ -165,5 +167,5 @@ test('end-to-end: proxy capture, findings, and all views render with real data',
 
   // 10) Emergency stop is always available and safe to click.
   await win.getByRole('button', { name: /EMERGENCY STOP/ }).click();
-  await expect(win.getByRole('button', { name: 'HTTP History' })).toBeVisible();
+  await expect(win.getByRole('button', { name: 'HTTP History', exact: true })).toBeVisible();
 });

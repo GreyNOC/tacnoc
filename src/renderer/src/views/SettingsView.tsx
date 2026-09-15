@@ -270,6 +270,16 @@ export function SettingsView(): JSX.Element {
         </div>
 
         <div className="card">
+          <h3 style={{ marginTop: 0 }}>Guided setup</h3>
+          <p className="hint" style={{ marginTop: 0 }}>
+            The walkthrough steps through every feature, one view at a time. It is skippable at any
+            point and will not come back on its own once you have skipped or finished it — this is
+            how you get it back.
+          </p>
+          <button onClick={s.startTour}>Replay the walkthrough</button>
+        </div>
+
+        <div className="card">
           <h3 style={{ marginTop: 0 }}>Project</h3>
           <p className="hint">
             Export writes a versioned, portable JSON snapshot (history, findings, scope, config,

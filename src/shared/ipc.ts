@@ -118,6 +118,10 @@ export const INVOKE_METHODS = [
   'setScope',
   'getConfig',
   'setConfig',
+  // Guided setup: per-install UI preferences (the walkthrough's state),
+  // deliberately outside the project database — see src/main/uiPrefs.ts.
+  'getUiPrefs',
+  'setUiPrefs',
   'getInterceptState',
   'setInterceptState',
   'listPendingRequests',

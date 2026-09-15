@@ -6,7 +6,44 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added — guided setup: intake, a readiness checklist, and a skippable walkthrough
+
+Opening TACNOC for the first time used to drop you on an empty HTTP History
+table with no indication that nothing would work until scope and a CA existed.
+Three pieces now sit between "installed" and "testing".
+
+- **Intake** asks for the program, the platform and your handle alongside the
+  project name and authorization reference, and folds them into the engagement
+  profile as soon as the project exists. Best effort by design: the project is
+  already open by then, so a profile write that fails must not read as a failed
+  project creation. Every field stays editable in Engagement.
+- **Setup is the new landing view**, and it renders `getPreflight()` — the same
+  report the AI mesh refuses to run against — worst-first, with each item wired
+  to the thing that clears it. It is deliberately not a second opinion about
+  readiness: if Setup is green, the engine agrees. A test asserts that every
+  check id `preflight.ts` can emit has somewhere to route, because a "Fix this"
+  button that goes nowhere fails silently.
+- **A walkthrough covers all seventeen features**, moving the app to each view as
+  it describes it rather than talking about them in the abstract. It is docked,
+  never modal, so you can keep clicking while it is open, and **Skip is on every
+  step** (Escape does the same). Skipping returns you to the view you were on
+  rather than stranding you where the tour navigated. Replay it any time from
+  Settings.
+
+Skipping sticks. The preference is per-install rather than per-project — having
+skipped it once, you should not meet it again on the next engagement — so it
+lives in `userData`, is written atomically, and repairs rather than rejects a
+corrupt file. An end-to-end test relaunches the app against the same profile to
+prove the skip survived the round trip, which is the only thing that actually
+demonstrates "skippable".
+
+### Fixed
+
+- **IPC dispatch resolved inherited `Object.prototype` keys.** The handler map is
+  an object literal, so `constructor` and `toString` reached dispatch despite not
+  being on the allowlist. Now an `Object.hasOwn` check. No capability was
+  reachable this way — the values are not callable handlers — but the allowlist
+  should be the only thing deciding.
 
 ## [0.5.8] — 2026-09-15
 
