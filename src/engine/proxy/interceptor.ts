@@ -39,8 +39,11 @@ export class Interceptor extends EventEmitter {
     const turningOffReq = this.state.interceptRequests && !next.interceptRequests;
     const turningOffRes = this.state.interceptResponses && !next.interceptResponses;
     this.state = next;
-    if (turningOffReq) this.releaseAllRequests();
-    if (turningOffRes) this.releaseAllResponses();
+    // FORWARD here, unlike the stop paths. Switching interception off means
+    // "stop holding my traffic and let it through" — dropping the queue would
+    // break the pages the operator is trying to resume browsing.
+    if (turningOffReq) this.releaseAllRequests('forward');
+    if (turningOffRes) this.releaseAllResponses('forward');
     this.emit('state', this.getState());
   }
 
@@ -90,23 +93,37 @@ export class Interceptor extends EventEmitter {
     return [...this.pendingResponses.values()].map((p) => p.view);
   }
 
-  /** Release everything as forward — used on shutdown/emergency stop. */
-  releaseAll(): void {
-    this.releaseAllRequests();
-    this.releaseAllResponses();
+  /**
+   * Release every held message so nothing is left waiting on a decision.
+   *
+   * The action is explicit and the callers choose it, because the two callers
+   * mean opposite things. Emergency stop and proxy shutdown mean **drop**: a
+   * held request has not been sent yet, and resolving it as `forward` sends it —
+   * so releasing on `forward` made the emergency stop deliver every queued
+   * request to the target, which is the precise opposite of what the control
+   * says it does and of what an operator hits it for. Dropping loses nothing
+   * that was not already the operator's to lose: the request was still theirs to
+   * cancel while it sat in the queue.
+   *
+   * @param action what to do with everything still held. Defaults to `drop`, so
+   *   a future caller that forgets to think about it fails safe.
+   */
+  releaseAll(action: 'forward' | 'drop' = 'drop'): void {
+    this.releaseAllRequests(action);
+    this.releaseAllResponses(action);
   }
 
-  private releaseAllRequests(): void {
+  private releaseAllRequests(action: 'forward' | 'drop'): void {
     for (const [id, p] of this.pendingRequests) {
       this.pendingRequests.delete(id);
-      p.resolve({ action: 'forward' });
+      p.resolve({ action });
     }
     this.emit('pending-changed');
   }
-  private releaseAllResponses(): void {
+  private releaseAllResponses(action: 'forward' | 'drop'): void {
     for (const [id, p] of this.pendingResponses) {
       this.pendingResponses.delete(id);
-      p.resolve({ action: 'forward' });
+      p.resolve({ action });
     }
     this.emit('pending-changed');
   }

@@ -14,6 +14,7 @@ import {
   type MeshRunProgress,
   type MeshStep,
 } from '@shared/ai.js';
+import type { AiProviderCheckDto } from '@shared/ipc.js';
 
 const TERMINAL = new Set(['done', 'error', 'stopped']);
 
@@ -33,6 +34,8 @@ export function AiMeshView(): JSX.Element {
   const [keyStatus, setKeyStatus] = useState<AiKeyStatus | undefined>(undefined);
   const [apiKey, setApiKey] = useState('');
   const [objective, setObjective] = useState('');
+  const [check, setCheck] = useState<AiProviderCheckDto | undefined>(undefined);
+  const [checking, setChecking] = useState(false);
 
   const [run, setRun] = useState<MeshRunProgress | undefined>(undefined);
   const [steps, setSteps] = useState<MeshStep[]>([]);
@@ -112,7 +115,32 @@ export function AiMeshView(): JSX.Element {
   const clearKey = async (): Promise<void> => {
     await api.clearAiApiKey();
     setKeyStatus(await api.getAiKeyStatus());
+    setCheck(undefined);
     setToast('API key cleared.');
+  };
+
+  /**
+   * Prove the key and model work before a run spends anything.
+   *
+   * Without this the first sign of a wrong key or a mistyped model id is a run
+   * dying partway through recon — after tokens are spent, and with an SDK error
+   * string that does not distinguish the two. The check counts tokens for a
+   * one-word prompt: it authenticates and resolves the model, and generates
+   * nothing.
+   */
+  const testConnection = async (): Promise<void> => {
+    setChecking(true);
+    try {
+      setCheck(await api.checkAiProvider('recon'));
+    } catch (err) {
+      setCheck({
+        ok: false,
+        model: config.roles.recon.model,
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setChecking(false);
+    }
   };
 
   const saveConfig = async (next: AiConfig): Promise<void> => {
@@ -182,10 +210,21 @@ export function AiMeshView(): JSX.Element {
                 Clear
               </button>
             )}
+            <button onClick={() => void testConnection()} disabled={checking}>
+              {checking ? 'Testing…' : 'Test connection'}
+            </button>
           </div>
+          {check && (
+            <div className={check.ok ? 'ok-box' : 'danger-box'}>
+              <strong>{check.ok ? 'Connection OK.' : 'Connection failed.'}</strong> {check.detail}
+              {check.remedy ? ` ${check.remedy}` : ''}
+            </div>
+          )}
           <p style={{ fontSize: 12, opacity: 0.7 }}>
             The key is held app-wide in OS secure storage and used only in the main process — it is
-            never shown back or sent to the page.
+            never shown back or sent to the page. The test authenticates and resolves the recon
+            role&rsquo;s model by counting tokens: it generates nothing, costs no output tokens, and
+            sends nothing to the target.
           </p>
         </div>
 

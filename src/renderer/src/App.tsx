@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useStore, type ViewId } from './store.js';
 import { Welcome } from './views/Welcome.js';
 import { HistoryView } from './views/HistoryView.js';
@@ -74,19 +74,108 @@ const NAV: { group: string; items: { id: ViewId; label: string }[] }[] = [
   },
 ];
 
+/**
+ * Minimise / maximise / close for the frameless window.
+ *
+ * Only rendered where the OS chrome is actually gone. On macOS the native
+ * traffic lights are still there (the title bar is hidden, not removed), and
+ * drawing a second set of controls beside them would be both redundant and
+ * wrong-handed.
+ */
+function WindowControls(): JSX.Element | null {
+  const [show, setShow] = useState(false);
+  const [maximized, setMaximized] = useState(false);
+
+  useEffect(() => {
+    void api
+      .windowUsesCustomControls()
+      .then(setShow)
+      .catch(() => setShow(false));
+    void api
+      .windowIsMaximized()
+      .then(setMaximized)
+      .catch(() => undefined);
+  }, []);
+
+  if (!show) return null;
+  return (
+    <div className="window-controls no-drag">
+      <button
+        className="win-btn"
+        aria-label="Minimize"
+        title="Minimize"
+        onClick={() => void api.windowMinimize()}
+      >
+        <svg viewBox="0 0 10 10" aria-hidden="true">
+          <path d="M0 5h10" stroke="currentColor" strokeWidth="1" />
+        </svg>
+      </button>
+      <button
+        className="win-btn"
+        aria-label={maximized ? 'Restore' : 'Maximize'}
+        title={maximized ? 'Restore' : 'Maximize'}
+        onClick={() => void api.windowToggleMaximize().then(setMaximized)}
+      >
+        <svg viewBox="0 0 10 10" aria-hidden="true">
+          {maximized ? (
+            <path
+              d="M2.5 2.5h5v5h-5zM0.5 7.5v-7h7"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1"
+            />
+          ) : (
+            <rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" />
+          )}
+        </svg>
+      </button>
+      <button
+        className="win-btn close"
+        aria-label="Close"
+        title="Close"
+        onClick={() => void api.windowClose()}
+      >
+        <svg viewBox="0 0 10 10" aria-hidden="true">
+          <path d="M0 0l10 10M10 0L0 10" stroke="currentColor" strokeWidth="1" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 function TopBar(): JSX.Element {
   const s = useStore();
   const pendingCount = s.pendingRequests.length + s.pendingResponses.length;
   const activeJobs = s.jobs.filter((j) => j.status === 'running' || j.status === 'paused').length;
 
+  /**
+   * The only control that starts the proxy, so its failures have to be visible.
+   *
+   * Both calls reject for ordinary reasons — the port is already taken, or no
+   * project is open (this bar renders on the welcome screen too). Neither was
+   * caught, so the click produced an unhandled rejection, the chip stayed on
+   * "Proxy off", and nothing anywhere said why.
+   */
   const toggleProxy = async (): Promise<void> => {
-    if (s.proxy.running) await api.stopProxy();
-    else await api.startProxy();
-    s.refreshProxy();
+    try {
+      if (s.proxy.running) await api.stopProxy();
+      else await api.startProxy();
+    } catch (err) {
+      s.setToast(
+        `Could not ${s.proxy.running ? 'stop' : 'start'} the proxy: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    } finally {
+      s.refreshProxy();
+    }
   };
 
+  // The window is frameless, so this bar is the title bar: it is the drag
+  // region, and every interactive child opts back out with `no-drag` or it
+  // cannot be clicked.
   return (
-    <div className="topbar">
+    <div className="topbar drag">
       <div className="brand">
         <Logo />
         <span>TACNOC</span>
@@ -108,9 +197,15 @@ function TopBar(): JSX.Element {
           non-loopback bind
         </span>
       )}
-      <span className={`chip ${s.intercept.interceptRequests ? 'on' : 'off'}`}>
+      {/* Either direction counts. Keyed on requests alone, the chip read
+          "Intercept off (1)" while a response sat held in the queue. */}
+      <span
+        className={`chip ${
+          s.intercept.interceptRequests || s.intercept.interceptResponses ? 'on' : 'off'
+        }`}
+      >
         <span className="dot" />
-        Intercept {s.intercept.interceptRequests ? 'on' : 'off'}
+        Intercept {s.intercept.interceptRequests || s.intercept.interceptResponses ? 'on' : 'off'}
         {pendingCount > 0 ? ` (${pendingCount})` : ''}
       </span>
       <span className={`chip ${activeJobs ? 'on' : 'off'}`}>
@@ -123,6 +218,7 @@ function TopBar(): JSX.Element {
       <button className="ghost" onClick={s.toggleTheme} title="Toggle theme">
         {s.theme === 'dark' ? '☾' : '☀'}
       </button>
+      <WindowControls />
     </div>
   );
 }

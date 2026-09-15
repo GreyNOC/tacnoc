@@ -16,6 +16,10 @@ import {
   type AppEvent,
   type CaInfoDto,
 } from '../shared/ipc.js';
+// One source of truth for the install guidance. This file used to carry a
+// verbatim copy of the engine's per-platform text, so the two could (and did)
+// drift while both looked authoritative.
+import { caInstallGuide, caInstallInstructions } from '../engine/ca/installInstructions.js';
 import { inspectJwt } from '../engine/transforms/codec.js';
 import { diffLines, diffJson, diffBytes } from '../engine/compare/compare.js';
 import { analyzeTokenSamples } from '../engine/analysis/sequencer.js';
@@ -25,17 +29,6 @@ type Handler = (
   win: () => BrowserWindow | null,
   args: unknown[],
 ) => unknown;
-
-function caInstallInstructions(): string {
-  switch (process.platform) {
-    case 'win32':
-      return 'Windows: import the saved .crt into "Trusted Root Certification Authorities" for the CURRENT USER (certmgr.msc → Trusted Root → All Tasks → Import). Only trust it while testing; remove it when finished.';
-    case 'darwin':
-      return 'macOS: open the saved .pem in Keychain Access (login keychain), then set it to "Always Trust". Remove trust when finished.';
-    default:
-      return "Linux: install the saved .pem into your browser's certificate store (browsers usually manage their own trust). Avoid adding it system-wide. Remove it when finished.";
-  }
-}
 
 const exampleExtensionDir = (): string => {
   // In dev the example lives in the repo; when packaged it is under resources.
@@ -135,7 +128,22 @@ const handlers: Record<string, Handler> = {
 
   getCaInfo(session): CaInfoDto {
     const info = session.getCaInfo();
-    return { ...info, installInstructions: caInstallInstructions() };
+    return {
+      ...info,
+      installInstructions: caInstallInstructions(),
+      // Rendered with the placeholder path: the guide is shown before anything
+      // has been saved, and re-fetched with the real path once it has.
+      installGuide: caInstallGuide(),
+    };
+  },
+
+  /**
+   * The install guide rendered for a specific saved certificate path, so the
+   * command the operator copies is the one that works — path quoted for their
+   * shell. Quoting stays in the engine; the renderer must not build shell text.
+   */
+  getCaInstallGuide(_s, _w, [certPath]) {
+    return caInstallGuide(typeof certPath === 'string' ? certPath : undefined);
   },
 
   async saveCaCertificate(session, win) {
@@ -156,6 +164,31 @@ const handlers: Record<string, Handler> = {
     await fs.writeFile(res.filePath, info.certPem);
     return res.filePath;
   },
+
+  // ---- frameless window controls ----
+  //
+  // The window has no OS chrome on Windows/Linux, so the renderer's top bar
+  // draws the controls and calls these. Each one is a no-op when the window is
+  // gone (quitting, or a renderer call that outlived it) rather than throwing
+  // into the operator's face over a button that no longer has anything to act on.
+  'window:minimize': (_s, win) => {
+    win()?.minimize();
+    return null;
+  },
+  'window:toggleMaximize': (_s, win) => {
+    const w = win();
+    if (!w) return false;
+    if (w.isMaximized()) w.unmaximize();
+    else w.maximize();
+    return w.isMaximized();
+  },
+  'window:close': (_s, win) => {
+    win()?.close();
+    return null;
+  },
+  'window:isMaximized': (_s, win) => win()?.isMaximized() ?? false,
+  /** Whether the renderer must draw its own controls (false on macOS). */
+  'window:usesCustomControls': () => process.platform !== 'darwin',
 
   getScope: (s) => s.getScope(),
   setScope: (s, _w, [scope]) => s.setScope(scope as never),
@@ -251,6 +284,8 @@ const handlers: Record<string, Handler> = {
   rotateCa: (s, _w, [reason]) => s.rotateCa((reason as string) ?? ''),
   revokeCa: (s, _w, [reason]) => s.revokeCa((reason as string) ?? ''),
 
+  checkAiProvider: (s, _w, [role]) =>
+    s.checkAiProvider(typeof role === 'string' ? (role as never) : undefined),
   getAiConfig: (s) => s.getAiConfig(),
   setAiConfig: (s, _w, [c]) => s.setAiConfig(c as never),
   setAiApiKey: (s, _w, [k]) => s.setAiApiKey(k as string),

@@ -34,7 +34,8 @@ const POLICY = `# Acme Bounty
 `;
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tacnoc-gate-'));
+  // Resolved for the same reason as in huntFolderLayout.test.ts: macOS tmpdir is a symlink.
+  dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tacnoc-gate-')));
   session = new TacnocSession({
     secretStoreFactory: () => new InMemorySecretStore(),
     aiSecretStore: new InMemorySecretStore(),

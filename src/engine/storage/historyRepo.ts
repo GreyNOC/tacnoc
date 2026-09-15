@@ -174,15 +174,31 @@ export class HistoryRepo {
     return row?.n ?? 0;
   }
 
-  /**
-   * Exchanges captured over a given scheme. Preflight uses the https count as
-   * evidence that TLS interception genuinely works — configuration alone cannot
-   * tell you whether the test browser actually trusts the CA.
-   */
+  /** Exchanges captured over a given scheme, whatever produced them. */
   countByScheme(scheme: string): number {
     const row = this.db.get<{ n: number }>(
       'SELECT COUNT(*) AS n FROM exchanges WHERE scheme = ?',
       scheme,
+    );
+    return row?.n ?? 0;
+  }
+
+  /**
+   * HTTPS exchanges that were **decrypted at the proxy** — the only evidence
+   * that TLS interception genuinely works.
+   *
+   * The source filter is the whole point. `countByScheme('https')` also counts
+   * Repeater and Variation traffic, and those are sent by the engine over Node's
+   * own TLS stack: they never present the project's leaf certificate to anything
+   * and never consult a browser's trust store, so they succeed whether or not
+   * the CA was ever installed. Counting them made a single HTTPS Repeater probe
+   * enough to report "TLS interception is working" over a browser that was still
+   * refusing every intercepted connection — precisely the quiet, hours-eating
+   * failure the readiness check exists to catch.
+   */
+  countInterceptedHttps(): number {
+    const row = this.db.get<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM exchanges WHERE scheme = 'https' AND source = 'proxy'",
     );
     return row?.n ?? 0;
   }

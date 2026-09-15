@@ -128,7 +128,14 @@ test('end-to-end: proxy capture, findings, and all views render with real data',
   await win.getByRole('button', { name: 'Analyze' }).click();
   await expect(win.getByText('poor', { exact: true })).toBeVisible({ timeout: 10000 });
 
+  // This run has already pushed real HTTPS through the proxy's MITM, so the
+  // certificate view should report interception as working and stand its setup
+  // guide down rather than walking a configured operator through it again.
   await win.getByRole('button', { name: 'CA Certificate' }).click();
+  await expect(win.getByText('HTTPS interception working')).toBeVisible();
+  await expect(win.getByText(/interception is already working/i)).toBeVisible();
+  // The warning is still one click away, with the steps.
+  await win.getByRole('button', { name: 'Show the steps anyway' }).click();
   await expect(win.getByText(/trusting this CA is powerful/i)).toBeVisible();
 
   await win.getByRole('button', { name: 'Audit Log' }).click();

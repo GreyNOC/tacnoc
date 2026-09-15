@@ -229,7 +229,8 @@ describe('hunt memory', () => {
   let dir = '';
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tacnoc-hunt-'));
+    // Resolved for the same reason as in huntFolderLayout.test.ts: macOS tmpdir is a symlink.
+    dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tacnoc-hunt-')));
   });
   afterEach(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);

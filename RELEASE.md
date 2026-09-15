@@ -33,8 +33,17 @@ rebuilds, then produces both Windows artifacts and their checksum manifest:
 - `TACNOC-<version>-Portable-x64.exe` — portable, runs without installing.
 - `TACNOC-<version>-Setup-x64.exe` — NSIS installer.
 
+**Order matters when you build both.** `dist:win` deletes everything in `dist/`
+before it starts, so running it *after* `dist:linux` silently destroys the Linux
+archive you just built — and the checksum manifest is rewritten without it, so
+nothing complains. Build Windows first, Linux second. (`dist:linux` does not
+clean `dist/`, which is what makes that order work.)
+
 **Linux one-shot:** `npm run dist:linux` rebuilds and produces
-`TACNOC-<version>-linux-x64.tar.gz` — extract it and run `./tacnoc`.
+`TACNOC-<version>-linux-x64.tar.gz` — extract it and run `./greynoc-tacnoc`.
+(The executable takes its name from the package `name`, not the `productName`,
+so it is `greynoc-tacnoc` rather than `tacnoc`. Verified against the built
+archive, not assumed.)
 
 ### Which Linux target can be built where
 
@@ -47,9 +56,14 @@ A Windows workstation can therefore cut the portable `.exe` **and** a runnable
 Linux `tar.gz`, but not an AppImage. Build AppImage on Linux
 (`npx electron-builder --linux AppImage`) or through the `release.yml` matrix.
 
-Note that a bare `npm run dist` builds every configured target for the host
-platform, so on Windows it will attempt AppImage and fail — use the per-OS
-scripts above.
+Note that a bare `npm run dist` builds only the **host platform's** configured
+targets — on Windows that is `nsis` + `portable`, and it succeeds. It does *not*
+attempt AppImage: that is a `linux:` target, reached only when `--linux` is
+passed, which is why `release.yml` can run a bare `npm run dist` on every matrix
+leg. Use the per-OS scripts above for what they add on top — a cleaned `dist/`,
+pinned target flags, and the checksum manifest in one step — and `dist:linux`
+specifically for the Linux `tar.gz`, which a bare `npm run dist` on Windows will
+not produce.
 
 Build on each target OS (or via the `release.yml` GitHub Actions matrix). Output
 goes to `dist/`. `node_modules/node-sqlite3-wasm` is unpacked from the asar
@@ -109,11 +123,148 @@ npm run release:prepare      # ci gate + full dependency audit + SBOM
 git tag vX.Y.Z && git push --tags   # triggers release.yml (drafts the release)
 ```
 
-### v0.5.2 — cut UNSIGNED (operator decision, 2026-08-09)
+### Tag record — correcting this file (2026-09-03)
 
-`v0.5.2` (the wiring QA/QC pass — see `CHANGELOG.md`) was built and tagged
-locally with **no code signing**, the same deliberate operator decision as every
-cut before it. `electron-builder` logs `signing with signtool.exe` during the
+Two of the entries below say a version "was built and tagged locally". **The tag
+part was not true.** Before this cut, `git tag` and `git ls-remote --tags origin`
+both listed only `v0.4.0` and `v0.4.1`, against the ten versions `CHANGELOG.md`
+recorded at the time; with `v0.5.3` they now list three tags against eleven
+versions. Everything from v0.4.2 through v0.5.2 was built and recorded here but
+never tagged, and since `release.yml` triggers on a `v*` tag, **no draft GitHub
+release was ever produced for any of them.** The artifacts and hashes below are
+still accurate for what was built locally — what was wrong is the claim that a
+tag existed.
+
+The entries are left in place rather than rewritten, with this correction above
+them, because the point of this file is an accurate record and quietly editing
+the history would defeat it.
+
+### Tag record — second correction (2026-09-15)
+
+The 2026-09-03 correction above was itself incomplete, and the release it
+described did not happen:
+
+- **`v0.5.3` never produced artifacts.** The `release.yml` run on that tag
+  failed its quality-gate step on `macos-latest`: `huntFolderLayout.test.ts`
+  compared a `/private/var/…` path the engine had resolved through `fs.realpath`
+  against the `/var/…` spelling `os.tmpdir()` returns, and only macOS puts a
+  symlink between the two. Fail-fast cancelled the Windows and Linux legs and
+  `draft-release` never ran. The local artifacts and hashes in the v0.5.3 record
+  are real, the tag exists, and nothing was ever attached to a release. The tag
+  is left where it is because it was published.
+- **`v0.5.3` was tagged off `master`.** The tag and its record sat on
+  `claude/ca-setup-guide-qaqc`, two commits ahead of a `master` that stayed at
+  0.5.2 — a version that was itself never tagged. The branch fast-forwarded onto
+  `master`; nothing had diverged.
+- **Six tags existed only in this workstation's clone.** `v0.1.0`, `v0.2.0`,
+  `v0.4.2`, `v0.4.3`, `v0.5.0` and `v0.5.1` were created here — annotated tags
+  dated July and August — and never pushed;
+  the 2026-09-03 correction was written from a checkout that did not have them.
+  They are pushed after the v0.5.4 run completes, and each push triggers
+  `release.yml` against a commit that cannot pass it — v0.4.2 through v0.5.1
+  predate `.gitattributes` and die on Windows `format:check`, all six predate
+  the macOS fix, and v0.1.0/v0.2.0 are older still — so expect a failed Release
+  run on every one of those tags. They are the record, not releases. `v0.5.2` is
+  tagged retroactively at `3599afa`, the `master` commit whose `package.json`
+  says 0.5.2, on the same reasoning.
+
+### v0.5.4 — cut UNSIGNED, built by CI (operator decision, 2026-09-15)
+
+`v0.5.4` is the v0.5.3 work plus the fixes that let it actually build, cut from
+`master` and tagged on the merge commit — the "re-tag on the merge commit" the
+v0.5.3 record asks for, done as a new version rather than by moving a published
+tag. No shipped behaviour differs from what v0.5.3 would have built (see
+`CHANGELOG.md`).
+
+Gate, run on this workstation before tagging: `npm run ci` green (format, lint,
+typecheck, 28 test files / 368 tests). Full-tree `npm audit` reports **0
+vulnerabilities at every level** after two lockfile-only bumps — `js-yaml`
+4.3.1 → 4.3.2 (high, GHSA-2883-xcg3-v3hh; reached only through
+`electron-builder` and `eslint`) and `vitest`/`@vitest/coverage-v8` 4.1.10 →
+4.1.11 (moderate, GHSA-82fw-gwwq-j7x9; the test runner) — neither is in the
+shipped runtime, whose ten SBOM components are unchanged; `sbom.json`
+regenerated. `npm run test:e2e` on this workstation: all 10 specs green in the
+real Electron runtime, including `hunt-folder.spec.ts` as changed. Note that
+`packaged.spec.ts` ran here against the `dist/` already on disk — the v0.5.2
+local build; nothing was packaged for 0.5.4 on this host — so the packaged-path
+check against the 0.5.4 binaries is the one the release matrix performs.
+
+The macOS failure could not be reproduced here. Windows needs Developer Mode to
+create a directory symlink (`EPERM` without it), and a directory junction is not
+resolved by Node's `fs.realpath`, so the string split that fails on macOS cannot
+be manufactured on this host. The fix is verified by the `macos-latest` leg of
+the release run below — the only place the defect ever showed.
+
+Artifacts are built by `release.yml` on the tag, on all three runners, with
+`packaged.spec.ts` run against each packaged binary before `draft-release`. They
+are UNSIGNED — no signing secrets are configured, the same operator decision as
+every cut before — and the release is a draft. The run, the artifacts, and their
+SHA-256 manifests are recorded here once it completes.
+
+### v0.5.3 — cut UNSIGNED (operator decision, 2026-09-03)
+
+`v0.5.3` (the certificate-setup pass — see `CHANGELOG.md`) is built and tagged
+with **no code signing**, the same deliberate operator decision as every cut
+before it, and it is the first version since v0.4.1 to actually carry a tag.
+
+> **The `v0.5.3` tag points at commit `796c551`, which is one commit behind the
+> artifacts recorded below.** A release-record audit run after tagging found
+> several documentation claims in this repo that did not match the code —
+> including two in this file and two in the v0.5.3 changelog entry — and
+> correcting them produced a follow-up commit. The delta is documentation, tests,
+> and one source comment: **no shipped behaviour differs** between the tagged
+> commit and the built artifacts. Re-tag on the merge commit so the tag and the
+> record line up again.
+
+Gate: 368 unit/integration tests green, all 10 E2E specs green **including
+`packaged.spec.ts` against the binaries below**, full-tree `npm audit` clean
+(three build-tooling advisories — `browserslist`, `fast-uri`, `@xmldom/xmldom` —
+cleared in the lockfile; none reaches the shipped runtime), SBOM regenerated.
+`electron-builder` logs `signing with signtool.exe`; with no certificate
+configured nothing is applied, and `Get-AuthenticodeSignature` on both Windows
+artifacts reports `NotSigned`. Verified rather than assumed.
+
+Built on a Windows x64 host — both Windows targets natively, and the Linux
+`tar.gz` cross-built (electron-builder downloads the Linux Electron and
+repackages the app directory; no Linux-only tooling is involved):
+
+| Artifact | SHA-256 |
+|---|---|
+| `TACNOC-0.5.3-Portable-x64.exe` (portable) | `c36cddfbf300c0853b6fd29a380d3fce4945873d37e62780a75020585d95fa88` |
+| `TACNOC-0.5.3-Setup-x64.exe` (NSIS) | `de010b59b6e6c79dfddfc9f80db61b64b797c7af0954b50d70c2d7e741deff9c` |
+| `TACNOC-0.5.3-linux-x64.tar.gz` (portable, cross-built) | `0ec0d11ae01943cd65284ef16c0a5f5d2bf8d7327b5509850bdb466feb1b7358` |
+
+Manifest: `dist/SHA256SUMS-windows.txt`. **That filename names the build host,
+not the target** — `scripts/checksums.mjs` labels the manifest by
+`process.platform`, so this one Windows-built manifest covers all three artifacts
+including the cross-built Linux archive. On the `release.yml` matrix each OS
+builds its own targets and the names line up with the contents; a local
+cross-build is the case where they do not. Nothing is missing from the manifest,
+but do not go looking for a `SHA256SUMS-linux.txt` from this cut.
+
+The Linux archive was verified by listing it: it unpacks to
+`TACNOC-0.5.3-linux-x64/` containing the `greynoc-tacnoc` executable. **AppImage
+was not built** — Windows cannot produce one (see the target table above) — and
+**no macOS artifact was built on this host.** The unsigned-install caveats below
+apply identically to this cut; the Linux archive carries no signature of any kind
+and the SHA-256 above is its only integrity check.
+
+Two findings in this release are worth reading before deploying it, because both
+changed a safety behaviour rather than adding a feature:
+
+- **Emergency stop and proxy shutdown now DROP held requests** instead of
+  forwarding them. If any local workflow depended on the queue being flushed to
+  the target on shutdown, it will not be any more — by design.
+- **The `ca-trust` preflight check counts proxy-decrypted HTTPS only.** A project
+  that previously reported "TLS interception is working" on the strength of
+  Repeater traffic will now correctly report that it is not.
+
+### v0.5.2 — built UNSIGNED, never tagged (operator decision, 2026-08-09)
+
+`v0.5.2` (the wiring QA/QC pass — see `CHANGELOG.md`) was built locally with **no
+code signing**, the same deliberate operator decision as every cut before it. It
+was **not** tagged — see the correction above.
+`electron-builder` logs `signing with signtool.exe` during the
 build; with no certificate configured nothing is applied, and
 `Get-AuthenticodeSignature` on the artifacts reports `NotSigned`. Verified rather
 than assumed.
@@ -206,6 +357,12 @@ next cut.
 
 ## Reproducibility
 
+- **The builds are not bit-reproducible.** Packaging the same commit twice
+  produces artifacts of identical size but different SHA-256 — electron-builder
+  embeds build-time metadata. So a recorded hash identifies *one specific build*,
+  not "the build of this commit": re-cutting a release invalidates the hashes
+  already published for it. Record the hashes from the artifacts you actually
+  ship, and re-record them if you rebuild.
 - `package-lock.json` pins the dependency tree; CI uses `npm ci`.
 - `sbom.json` and per-OS `SHA256SUMS-<os>.txt` manifests accompany each release
   for verification.

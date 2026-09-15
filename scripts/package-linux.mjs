@@ -91,11 +91,22 @@ console.log('\nLinux artifact:');
 for (const name of artifacts) {
   console.log(`  ${name}  (${mib(statSync(path.join(dist, name)).size)})`);
 }
+// The Linux executable is named from the package `name`, NOT the `productName`
+// — so it is `greynoc-tacnoc`, not `tacnoc`. This message used to print
+// `./tacnoc`, which names a file that is not in the archive: anyone following it
+// got "No such file or directory" from the very first thing they were told to
+// run. Read it out of the built payload rather than hardcoding it again.
+const EXE_FALLBACK = 'greynoc-tacnoc';
+const unpacked = path.join(dist, 'linux-unpacked');
+const exeName = existsSync(unpacked)
+  ? (readdirSync(unpacked).find((f) => f === EXE_FALLBACK) ?? EXE_FALLBACK)
+  : EXE_FALLBACK;
+
 console.log(
   '\nRun it on a Linux x64 host:\n' +
     `  tar -xzf ${artifacts[0]}\n` +
-    '  cd TACNOC-*/ && ./tacnoc\n' +
+    `  cd TACNOC-*/ && ./${exeName}\n` +
     '\nElectron needs a display and the usual desktop libraries (GTK, NSS, libX11).\n' +
-    'On a headless box: xvfb-run ./tacnoc — or use --no-sandbox only if your\n' +
+    `On a headless box: xvfb-run ./${exeName} — or use --no-sandbox only if your\n` +
     'container lacks user namespaces, understanding that it lowers isolation.',
 );

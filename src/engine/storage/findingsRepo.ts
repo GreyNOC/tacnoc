@@ -32,7 +32,15 @@ export class FindingsRepo {
 
   /**
    * Insert a finding unless an identical one (same exchange + dedupeKey) already
-   * exists. Returns true if inserted. Applies suppression rules on insert.
+   * exists. Returns true if inserted **and visible**. Applies suppression rules
+   * on insert.
+   *
+   * A finding stored as suppressed returns false. The return value drives the
+   * `finding` event, and the sidebar badge counts that event while the Findings
+   * list counts unsuppressed rows — so returning true for a suppressed insert
+   * made the badge climb for findings the operator had explicitly suppressed and
+   * could not see. Callers that genuinely need "was a row written" should ask the
+   * store, not this signal.
    *
    * `host` is the exchange host, supplied by callers that know it so host-scoped
    * suppression rules can be enforced. When omitted, host-scoped rules do NOT
@@ -67,7 +75,8 @@ export class FindingsRepo {
       suppressed ? 1 : 0,
       finding.note ?? null,
     );
-    return true;
+    // Written, but invisible — do not announce it.
+    return !suppressed;
   }
 
   list(query: FindingsQuery = {}): Finding[] {

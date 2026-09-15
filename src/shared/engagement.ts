@@ -249,9 +249,13 @@ export interface CaStatus {
   history: CaRevocation[];
   /**
    * Evidence that interception actually works, read from captured traffic:
-   * decrypted HTTPS exchanges seen in this project. Zero with a running proxy
-   * and browsing activity means the CA is almost certainly not trusted by the
-   * test browser.
+   * HTTPS exchanges **decrypted at the proxy** in this project. Zero with a
+   * running proxy and browsing activity means the CA is almost certainly not
+   * trusted by the test browser.
+   *
+   * Repeater and Variation HTTPS is deliberately excluded: the engine sends that
+   * over its own TLS stack, so it succeeds whether or not any client trusts the
+   * CA and proves nothing about interception.
    */
   observedHttpsExchanges: number;
   installInstructions: string;

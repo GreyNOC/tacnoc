@@ -62,6 +62,16 @@ export interface AgentTurnResult {
   stopReason: string;
 }
 
+/** Outcome of a credential/model check made before any run is started. */
+export interface ProviderCheck {
+  ok: boolean;
+  model: string;
+  /** Plain-language outcome, safe to show verbatim. Never contains the key. */
+  detail: string;
+  /** The single thing to change, when the failure identifies one. */
+  remedy?: string;
+}
+
 export interface LlmProvider {
   readonly id: string;
   /**
@@ -71,4 +81,13 @@ export interface LlmProvider {
    * aborted via `signal`.
    */
   runAgent(options: AgentTurnOptions): Promise<AgentTurnResult>;
+  /**
+   * Prove the credentials and the model id work, without generating anything.
+   *
+   * Optional so a backend that cannot check cheaply simply omits it. The point
+   * is to move the "your key is wrong" / "that model does not exist" failure
+   * from three roles into a live run — after tokens are spent and traffic may
+   * already have reached the target — to a button the operator presses first.
+   */
+  verify?(model: string): Promise<ProviderCheck>;
 }

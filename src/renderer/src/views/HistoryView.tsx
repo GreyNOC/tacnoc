@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.js';
 import type { ExchangeSummary, HistoryFilter } from '@shared/query.js';
@@ -51,8 +51,25 @@ export function HistoryView(): JSX.Element {
     });
   }, [text, method, statusClassFilter, mime, source, inScopeOnly]);
 
+  /**
+   * Debounce bursts of captures — the same treatment the Target Map already
+   * gets, and for a sharper reason here.
+   *
+   * Each load pulls 500 rows, and the history read decrypts every row's header
+   * JSON and inline body before `summarize()` throws all of it away for a table
+   * that shows sizes. Firing that per captured exchange put hundreds of AES-GCM
+   * opens per second on the main process during a variation job with this view
+   * open. The cap keeps sustained capture refreshing instead of starving the
+   * timer.
+   */
+  const lastLoadedAt = useRef(0);
   useEffect(() => {
-    load();
+    const delay = Date.now() - lastLoadedAt.current > 1500 ? 0 : 250;
+    const timer = setTimeout(() => {
+      lastLoadedAt.current = Date.now();
+      load();
+    }, delay);
+    return () => clearTimeout(timer);
   }, [load, s.exchangeTick]);
 
   const select = (id: string): void => {

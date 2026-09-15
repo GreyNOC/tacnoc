@@ -23,25 +23,63 @@ Verified: leaf certs validate against the CA over a real TLS handshake (see
 `test/engine/ca.test.ts`) and the proxy decrypts/re-encrypts HTTPS end to end
 (`test/engine/proxy.test.ts`).
 
-## Trusting the CA — an explicit, warned, manual step
+## Trusting the CA — optional, guided, and always your decision
 
-The app **never modifies your operating system's trust store.** In the
-**CA Certificate** view you must acknowledge the risk, then save the certificate
-to a file and install it yourself:
+**This step is optional.** Plain `http://` traffic is captured with no
+certificate at all, and a project is fully usable without ever installing one.
+You only need it to read `https://`.
 
-- **Windows:** import the `.crt` into *Trusted Root Certification Authorities*
-  for the **current user** (`certmgr.msc` → Trusted Root → All Tasks → Import).
-- **macOS:** open the `.pem` in *Keychain Access* (login keychain) and set it to
-  *Always Trust*.
-- **Linux:** install the `.pem` into your **browser's** certificate store
-  (browsers typically manage their own trust); avoid system-wide trust.
+The app **never modifies your operating system's trust store.** The
+**CA Certificate** view walks you through it in four steps and hands you the
+command to run yourself:
+
+1. **Save the certificate to a file.** You acknowledge the risk first; the
+   private key never leaves OS secure storage.
+2. **Trust it.** The view shows the exact command for your platform, with the
+   saved path already quoted for your shell, plus the by-hand equivalent if you
+   would rather see each dialog. The **removal** command is shown next to it, not
+   in a footnote.
+3. **Point your browser at the proxy** — both HTTP *and* HTTPS. A browser that
+   proxies only HTTP never sends the `CONNECT` that interception depends on.
+4. **Check that it worked.** See below — this step reads evidence, not settings.
+
+The commands the guide gives you, by platform:
+
+| Platform | Install | Remove |
+|---|---|---|
+| Windows | `certutil -addstore -user Root <file>` | `certutil -delstore -user Root "TACNOC Project CA"` |
+| macOS | `security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db <file>` | `security delete-certificate -c "TACNOC Project CA"` |
+| Linux (Chrome/Chromium) | `certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "TACNOC Project CA" -i <file>` | `certutil -d sql:$HOME/.pki/nssdb -D -n "TACNOC Project CA"` |
+
+Each of these deliberately takes the **narrowest trust that works**: the current
+user rather than the machine, the login keychain rather than the System keychain,
+the browser's own NSS store rather than the system CA bundle. None of them needs
+administrator rights, which is the point — a step that demands elevation is a
+step that gets run in the wrong scope.
+
+**Firefox and Tor Browser keep their own certificate stores** and ignore the OS
+one entirely. Import the file at *Settings → Privacy & Security → Certificates →
+View Certificates → Authorities → Import* and tick *Trust this CA to identify
+websites*. This is the single most common reason a correct-looking install
+captures nothing.
+
+### Verifying it actually works
+
+The guide's last step counts **HTTPS exchanges the proxy decrypted**. It counts
+proxy traffic only: Repeater and Variation requests travel over the engine's own
+TLS stack, never present the project's leaf certificate to anything, and succeed
+whether or not any client trusts the CA — so counting them would let a single
+engine-generated probe report success over a browser that was still refusing
+every intercepted connection. The same number backs the `ca-trust` check in
+[preflight](engagement-and-hunting.md).
 
 ### Strong recommendations
 
 - Install the CA **only** into the browser/profile you use for the engagement —
   ideally a dedicated testing profile.
 - **Remove trust when you are finished.** A trusted interception CA is a
-  standing risk if the key is ever exposed.
+  standing risk if the key is ever exposed. The removal command sits beside the
+  install command in the guide for exactly this reason.
 - Never share the CA **private** key. Only the public certificate is meant to be
   distributed, and only to systems you control for testing.
 

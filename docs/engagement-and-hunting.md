@@ -32,10 +32,13 @@ The checks are grounded in something observable, never in configuration alone:
   be refused, so an empty scope is a **blocker**.
 - **Certificate** — validity window and days remaining. Expired is a **blocker**;
   expiring within 30 days is a warning.
-- **Interception actually works** — the count of *decrypted HTTPS exchanges this
-  project has captured*. Zero, with traffic in history, almost always means the
-  test browser does not trust the CA. Configuration cannot tell you this;
-  captured bytes can.
+- **Interception actually works** — the count of HTTPS exchanges *decrypted at
+  the proxy*. Zero, with traffic in history, almost always means the test browser
+  does not trust the CA. Configuration cannot tell you this; captured bytes can.
+  Repeater and Variation HTTPS is excluded on purpose: the engine sends that over
+  its own TLS stack and it succeeds whether or not anything trusts the CA, so
+  counting it let one engine-generated probe — including a mesh run's own —
+  report interception as working over a browser refusing every connection.
 - **Identity compliance** — measured against requests that were really sent, not
   against the setting.
 - **Proxy bind** — a non-loopback bind is a **blocker**.

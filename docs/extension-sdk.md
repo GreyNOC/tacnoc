@@ -114,7 +114,14 @@ Load it from the **Extensions** view ("Load bundled example"). It is covered by
 
 ## Versioning
 
-`sdkVersion` in the manifest is checked against the host SDK version. Breaking
-API changes bump the SDK major version; additive changes bump minor. Host getters
-(`getScannerChecks`, `getTransforms`, `getEditorTabs`, `getContextMenuActions`,
-`drainCreatedFindings`) namespace extension artifacts by extension id.
+`sdkVersion` in the manifest declares the SDK major version an extension targets.
+It is **not currently enforced**: the loader checks for a duplicate extension id
+and for elevated permissions the operator has not granted, and nothing reads
+`manifest.sdkVersion` — so an extension declaring an incompatible version still
+loads. The host SDK version is exposed to extension code as `tacnoc.version`.
+Treat the field as a declaration of intent, not a compatibility gate.
+
+Breaking API changes bump the SDK major version; additive changes bump minor.
+Host getters (`getScannerChecks`, `getTransforms`, `getEditorTabs`,
+`getContextMenuActions`, `drainCreatedFindings`) namespace extension artifacts by
+extension id.

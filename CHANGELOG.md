@@ -8,6 +8,168 @@ All notable changes to TACNOC are documented here. The format follows
 
 _Nothing yet._
 
+## [0.5.4] — 2026-09-15
+
+### Fixed — the v0.5.3 release never built
+
+- **The release gate failed on macOS, so no v0.5.3 artifacts were ever
+  produced.** `release.yml` on the `v0.5.3` tag failed its quality-gate step on
+  `macos-latest`, fail-fast cancelled the Windows and Linux legs, and the
+  draft-release job never ran. The failure was in the tests, not the engine:
+  `os.tmpdir()` on macOS is `/var/folders/…`, a symlink to
+  `/private/var/folders/…`, and the engine resolves every workspace path
+  through `fs.realpath` — so `huntFolderLayout.test.ts` compared
+  `/private/var/…` against `/var/…`, two spellings of one directory, and failed
+  on the one OS where they differ. Every test that derives paths from a temp
+  directory now resolves that directory at creation, so the comparison is
+  canonical-to-canonical everywhere. `hunt-folder.spec.ts` (E2E, which the
+  release matrix also runs on macOS) carried the same latent mismatch and is
+  fixed the same way.
+- **v0.5.3 was tagged on a branch that never reached `master`.** The tag and
+  its record sat on `claude/ca-setup-guide-qaqc`; `master` stayed at 0.5.2,
+  itself never tagged. The branch is merged (a fast-forward — nothing diverged)
+  and this version is cut from `master`, so the default branch, the tag, and the
+  record line up again. The `v0.5.3` tag stays where it is — it was published —
+  and marks a version that has no artifacts.
+
+### Changed
+
+- This is the first cut to carry the corrections made after the `v0.5.3` tag:
+  the `SECURITY.md`, `RELEASE.md`, `docs/extension-sdk.md` and `docs/testing.md`
+  claims that did not match the code, the `package-linux.mjs` executable name,
+  and the Mythos thinking/effort coverage note. No shipped behaviour differs
+  from what `v0.5.3` would have built.
+
+## [0.5.3] — 2026-09-03
+
+### Added — the certificate step, guided and optional
+
+Trusting the interception CA is the step people get wrong, and getting it wrong
+is silent: the proxy runs, the browser browses, and no HTTPS is ever captured.
+The old screen was a fingerprint, a warning, and a paragraph of prose the
+operator had to translate into a sequence of dialogs, with nothing anywhere
+confirming it had worked.
+
+- **Four guided steps** — save the certificate, trust it, point the browser at
+  the proxy, verify. Each says what to do and what to expect.
+- **A command, not a paragraph.** The trust step gives the exact command for the
+  platform, with the saved path already quoted for that shell, plus the by-hand
+  route for anyone who would rather see each dialog. Every guide takes the
+  narrowest trust that works — current user, login keychain, the browser's own
+  NSS store — and none needs administrator rights. **The app still never touches
+  the OS trust store**; it hands over a command the operator runs.
+- **Removal sits next to installation**, not in a footnote, because a trusted
+  interception CA left behind after an engagement is a standing risk.
+- **It says it is optional, first.** HTTP is captured with no certificate at
+  all. The guide can be skipped, and stands itself down once interception is
+  verified instead of nagging an operator who is already set up.
+- **Verification reads evidence, not settings** — see below.
+- The Firefox/Tor separate-trust-store trap, the single commonest cause of a
+  correct-looking install that captures nothing, is called out per platform.
+
+### Fixed
+
+- **"TLS interception is working" could be true when the browser trusted
+  nothing.** The evidence count behind that preflight check counted *any* HTTPS
+  exchange, including Repeater and Variation traffic — which the engine sends
+  over its own TLS stack, never presenting the project's leaf certificate, and
+  which succeeds whether or not any client trusts the CA. One HTTPS Repeater
+  probe was enough to report interception as working over a browser refusing
+  every intercepted connection, and a mesh run's own traffic made the next run's
+  recon pass the check. It now counts proxy-decrypted exchanges only.
+- **EMERGENCY STOP sent every held request to the target.** Releasing the
+  intercept queue resolved each pending message as `forward`, and a held request
+  has not been sent yet — so the one control whose entire job is to stop touching
+  the target delivered the queue to it, while the UI reported that all automated
+  work had been halted. Stopping the proxy did the same. Both now drop, and the
+  release action is an explicit argument that defaults to dropping. Switching
+  interception off still forwards, which is what that gesture means.
+- **The only control that starts the proxy swallowed every failure.** A taken
+  port or no open project rejected into an unhandled promise: the chip stayed on
+  "Proxy off" and nothing said why.
+- **The findings badge counted findings the operator had suppressed.** A
+  suppressed finding is stored but not listed, yet it still announced itself, so
+  the sidebar count climbed while the Findings list gained nothing.
+- **The identity-compliance check could pass on a sample of zero.** It took the
+  newest 100 exchanges of *any* source and then filtered to generated traffic, so
+  ordinary browsing pushed the Repeater and Variation requests out of the window
+  entirely — at which point it reported that every generated request carried the
+  required User-Agent, on the strength of no requests at all.
+- **HTTP History re-ran a 500-row query on every captured exchange**, decrypting
+  every row's headers and inline bodies for a table that shows sizes. Debounced,
+  the way the Target Map already was.
+- **A rejected engagement profile was left on screen as if saved** — tick
+  "enforce" with no User-Agent set and the box stayed ticked over an engine that
+  had refused it.
+- **The Intercept chip ignored response interception**, reading "Intercept off
+  (1)" while a response sat held.
+- The main process carried a **verbatim copy** of the engine's per-platform
+  install text, so the two could drift while both looked authoritative.
+
+### Changed — AI harness
+
+- **Sonnet 4.6 ran with thinking switched off.** It was listed as accepting the
+  effort parameter but not adaptive thinking, and on that generation omitting
+  the thinking field means the model does not reason at all — so choosing it for
+  a role sent `effort: xhigh` to a non-reasoning turn while the UI showed the
+  lever at maximum.
+- **Mythos models got neither thinking nor effort.** No entry in the capability
+  lists prefix-matched any `claude-mythos-*` id, so a role set to one received no
+  `thinking` and no `output_config.effort` at all — the same silent failure as
+  Sonnet 4.6, from the same cause. `claude-mythos-5` is now listed for adaptive
+  thinking and effort; task budgets remain Fable/Opus/Sonnet only. Fable was
+  already covered and is unchanged apart from ordering, and matching is still by
+  id prefix, so `claude-fable-5-1` is covered by the `claude-fable-5` entry.
+- **"Test connection"** checks the key and the model id before a run exists. It
+  counts tokens for a one-word prompt: it authenticates and resolves the model,
+  generates nothing, and sends nothing at the target. Without it, a wrong key or
+  a mistyped model id first surfaced partway through a live run.
+- **API failures name the one thing to fix.** Wrong key, no model access, wrong
+  model id, rate limit, and no network are indistinguishable in the raw SDK
+  message and lead to completely different fixes; each is now classified and
+  reported as a sentence. An operator-initiated abort is still reported as a
+  stop, not an error.
+- **The per-role output ceiling rose from 16K to 32K** for the standard-effort
+  roles. Every request streams, so the timeout that once justified a small cap no
+  longer applies, and adaptive thinking shares that budget with the answer — the
+  reporter, writing a full engagement report, was the role running out of it.
+
+### Changed — the window is frameless
+
+The app's own top bar is now the title bar. macOS keeps its native traffic
+lights floating over the content; Windows and Linux drop the OS frame entirely
+and the top bar draws its own minimise, maximise, and close.
+
+### Security
+
+- `browserslist` and `fast-uri` (high) and `@xmldom/xmldom` (moderate) advisories
+  cleared (lockfile only). All three are build tooling — vite/postcss and
+  electron-builder — and none reaches the shipped runtime, but the release gate
+  audits the full tree.
+
+### Fixed — documentation that overstated what the code does
+
+Found by auditing every claim in the repo against the code during the release
+cut. This project's standard is "reproducible or it didn't happen", so a doc that
+claims a protection or a gate that does not exist is a defect, not a nit.
+
+- **`SECURITY.md` said at-rest encryption was "not yet implemented"** and that
+  "HTTP/2/3 interception is not implemented". Both were stale since v0.4.0:
+  content is AES-256-GCM encrypted at rest, and HTTP/2 *is* intercepted. Every
+  other document in the repo already said so. The known-limitations section now
+  states what is actually true, including what encryption does *not* cover.
+- **`docs/extension-sdk.md` claimed `sdkVersion` is checked against the host SDK
+  version.** Nothing reads that field — an extension declaring an incompatible
+  version loads without a warning. Documented as a declaration of intent, not the
+  compatibility gate it was described as.
+- **`RELEASE.md` claimed a bare `npm run dist` attempts AppImage and fails on
+  Windows.** It does not: electron-builder builds host-platform targets only, and
+  `release.yml` runs exactly that command on its Windows leg — so the file
+  contradicted its own CI instructions.
+- Corrected two claims in this changelog's own AI-harness section, and a coverage
+  row in `docs/testing.md` that credited an E2E spec with an assertion it does not
+  make.
+
 ## [0.5.2] — 2026-08-09
 
 ### Fixed — QA/QC pass on wiring: controls that looked like they worked
