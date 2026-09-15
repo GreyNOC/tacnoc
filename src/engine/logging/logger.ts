@@ -100,7 +100,15 @@ export class Logger {
   }
 
   private redactValue(v: unknown): unknown {
-    if (typeof v === 'string') return this.redactor.redactText(v);
+    // `redactUrl`, not `redactText`. Metadata routinely carries URLs and
+    // request targets — the proxy logs `url` on every upstream error — and
+    // query parameters named `code`, `sig` or `session` are masked only by the
+    // URL-aware path; `redactText` catches secret-SHAPED strings and would let
+    // those through. It is a strict superset: with no `?` it is exactly
+    // `redactText`, and with one it also redacts each half. This matters more
+    // now that records reach `LogBuffer` and can be exported to a file the UI
+    // describes as redacted.
+    if (typeof v === 'string') return this.redactor.redactUrl(v);
     if (Array.isArray(v)) return v.map((x) => this.redactValue(x));
     if (v && typeof v === 'object') {
       const out: Record<string, unknown> = {};
@@ -113,7 +121,12 @@ export class Logger {
   }
 }
 
-function consoleSink(record: LogRecord): void {
+/**
+ * The default sink. Exported so a caller can tee it — `LogBuffer` keeps a tail
+ * for diagnostics export and must not take the terminal output away from
+ * anyone running the app from a shell.
+ */
+export function consoleSink(record: LogRecord): void {
   const line = JSON.stringify(record);
   if (record.level === 'error') console.error(line);
   else if (record.level === 'warn') console.warn(line);

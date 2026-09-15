@@ -19,7 +19,7 @@ parity with any commercial product.
 | Decoder | Implemented | URL/Base64/hex/HTML/gzip, hashes, timestamps, decode-only JWT inspection, extension transforms | No automatic multi-layer decoding pipeline |
 | Comparer | Implemented | Text, JSON-aware, and byte diffs | No synchronized visual response renderer |
 | Session handling | Partial | Repeater cookie jar, secure-cookie enforcement, cross-host credential stripping | No macro engine, login-state rules, or automatic session refresh |
-| Findings / issue management | Implemented | Findings list, evidence/remediation, suppression, scanner-module inventory | No standardized report generator or external issue-tracker sync |
+| Findings / issue management | Implemented | Findings list, evidence/remediation, suppression, scanner-module inventory | Per-target evidence bundles export findings, exchanges and an agent handoff (`docs/evidence-bundles.md`); no external issue-tracker sync |
 | Extensions | Implemented | Capability-based SDK in a bounded subprocess plus inner VM; checks, transforms, traffic, findings, UI registrations | Not compatible with third-party BApp/Montoya APIs; not a kernel sandbox |
 | Collaborator / OAST | Not implemented | — | Requires an explicitly configured, researcher-controlled interaction service and strict project scoping |
 | Browser | Not implemented | Works with an externally configured browser and manually trusted project CA | No embedded preconfigured browser/profile manager |
