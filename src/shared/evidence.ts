@@ -29,7 +29,14 @@ export interface EvidenceBundleOptions {
   includeRawCaptures?: boolean;
   /** Newest-first cap on exchanges written. Default 500. */
   maxExchanges?: number;
-  /** Include the in-memory log tail as `logs/tacnoc.log.jsonl`. Default true. */
+  /**
+   * Include the in-memory log tail as `logs/tacnoc.log.jsonl`. Off by default.
+   * The tail is session-wide, not per-target: it names every host the proxy has
+   * touched since the app started, so a bundle addressed to one program used to
+   * carry the others. Redaction does not help — a hostname is not a secret, it
+   * is the disclosure. Turn it on when the recipient needs to see what the tool
+   * did, knowing the whole session goes with it.
+   */
   includeLogs?: boolean;
   /** Include `HANDOFF.md` + `handoff.json`. Default true. */
   includeHandoff?: boolean;

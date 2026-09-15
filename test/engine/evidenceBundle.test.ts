@@ -7,11 +7,19 @@
  * `notacme-corp.test.evil.example`'s traffic to whoever triages `acme-corp.test`
  * — one target's data disclosed to another program. That is the failure this
  * feature could plausibly cause, so it is tested first and directly.
+ *
+ * It was tested blind. The fixture returned a one-line briefing and a one-line
+ * log tail, neither of which could ever mention the impostor, so the two
+ * sections that actually did — the engine briefing, rendered verbatim into
+ * `HANDOFF.md`, and the unfiltered session log — passed the assertion by being
+ * incapable of failing it. Both fixtures now carry the impostor, which is the
+ * only way the assertion means anything.
  */
 
 import { describe, expect, it } from 'vitest';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as zlib from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { buildEvidenceBundle, type BundleSource } from '../../src/engine/evidence/bundle.js';
@@ -163,8 +171,28 @@ function source(over: Partial<BundleSource> = {}): BundleSource {
     audit: [
       { ts: NOW - 400, actor: 'operator', action: 'job.create', target: `https://${HOST}/account` },
     ],
-    engineBriefing: () => Promise.resolve('ENGINE BRIEFING — scope is set.'),
-    logs: { jsonl: '{"level":"info","msg":"proxy started"}\n', count: 1, dropped: 0 },
+    // Models `session.engineBriefing({ host })`: unnarrowed it ranks every site
+    // the project has captured, which is exactly how another target's endpoints
+    // reached a bundle addressed to this one.
+    engineBriefing: (scopedHost?: string) =>
+      Promise.resolve(
+        [
+          'ENGINE BRIEFING — scope is set.',
+          '## Ranked attack surface (in-scope endpoints, best first)',
+          ...[HOST, IMPOSTOR]
+            .filter((h) => scopedHost === undefined || h === scopedHost)
+            .map((h, i) => `${i + 1}. GET https://${h}/account — access-control`),
+        ].join('\n'),
+      ),
+    // The proxy logs `{ url }` and `{ host, port }` for every host it sees, so
+    // the tail names targets this bundle is not addressed to.
+    logs: {
+      jsonl:
+        '{"level":"info","msg":"proxy started"}\n' +
+        `{"level":"info","msg":"connect","host":"${IMPOSTOR}","port":443}\n`,
+      count: 2,
+      dropped: 0,
+    },
     redactor: new Redactor({
       maskCookies: true,
       maskAuthorization: true,
@@ -271,6 +299,32 @@ describe('evidence bundle', () => {
     }
   });
 
+  it('asks for the engine briefing by host, never for the whole project', async () => {
+    const asked: (string | undefined)[] = [];
+    const built = await buildEvidenceBundle(
+      source({
+        engineBriefing: (h?: string) => {
+          asked.push(h);
+          return Promise.resolve(`briefing for ${h}`);
+        },
+      }),
+    );
+    // The briefing is free text the bundle cannot police after the fact, so the
+    // narrowing has to happen where it is produced. All this module can do —
+    // and must do — is say which host it wants.
+    expect(asked).toEqual([HOST]);
+    expect(built.handoff.engineBriefing).toBe(`briefing for ${HOST}`);
+  });
+
+  it('leaves the session log tail out unless the operator asks for it', async () => {
+    const off = readZip((await buildEvidenceBundle(source())).zip);
+    expect([...off.keys()]).not.toContain('logs/tacnoc.log.jsonl');
+
+    const on = await buildEvidenceBundle(source(), { includeLogs: true });
+    expect([...readZip(on.zip).keys()]).toContain('logs/tacnoc.log.jsonl');
+    expect(on.summary.logCount).toBe(2);
+  });
+
   it('omits logs and the handoff when they are turned off', async () => {
     const built = await buildEvidenceBundle(source(), {
       includeLogs: false,
@@ -283,6 +337,95 @@ describe('evidence bundle', () => {
     expect(built.summary.logCount).toBe(0);
     // The handoff is still computed — a live mesh hand-off needs it without a file.
     expect(built.handoff.target.host).toBe(HOST);
+  });
+});
+
+/** A single exchange whose response body is exactly these bytes. */
+function withResponseBody(body: Buffer, contentEncoding?: string): Partial<BundleSource> {
+  const row = summary('ex-1', HOST);
+  const response: NonNullable<ExchangeDetail['response']> = {
+    statusCode: 200,
+    statusMessage: 'OK',
+    httpVersion: 'HTTP/1.1',
+    headers: [{ name: 'Content-Type', value: 'application/json' }],
+    bodyBase64: body.toString('base64'),
+    bodySize: body.length,
+    bodyTruncated: false,
+    truncatedForView: false,
+    sensitive: { hasCookies: false, hasAuthorization: false, hasTokens: false, fields: [] },
+    ...(contentEncoding ? { contentEncoding } : {}),
+  };
+  return {
+    exchanges: [row],
+    exchangesAvailable: 1,
+    findings: [],
+    detail: () => Promise.resolve({ ...detail(row), response }),
+  };
+}
+
+const exchangeFile = (files: Map<string, Buffer>): Buffer => {
+  const name = [...files.keys()].find((k) => k.startsWith('exchanges/'));
+  if (!name) throw new Error(`bundle has no exchange file — has ${[...files.keys()].join(', ')}`);
+  return files.get(name) as Buffer;
+};
+
+/**
+ * What the bundle does with a body it was handed.
+ *
+ * Captured bodies are stored `Content-Encoding`-compressed, which for real
+ * HTTPS traffic means nearly every response. Rendering them as UTF-8 text
+ * destroyed them and left the file claiming `REDACTED` over bytes no redactor
+ * had been able to read.
+ */
+describe('evidence bundle bodies', () => {
+  it('decompresses a gzip body, so the redaction it claims can actually happen', async () => {
+    const payload = '{"session_token":"tok_live_SHOULD_NOT_LEAK","plan":"enterprise"}';
+    const built = await buildEvidenceBundle(
+      source(withResponseBody(zlib.gzipSync(Buffer.from(payload, 'utf8')), 'gzip')),
+    );
+    const exchange = exchangeFile(readZip(built.zip)).toString('utf8');
+
+    // The masked value is the proof: the redactor cannot match a pattern in
+    // bytes it cannot decode, so a `[REDACTED]` here means the body was read.
+    expect(exchange).toContain('"session_token":"[REDACTED]"');
+    expect(exchange).toContain('"plan":"enterprise"');
+    expect(exchange).not.toContain('tok_live_SHOULD_NOT_LEAK');
+    expect(exchange).toContain('response body decompressed from gzip');
+  });
+
+  it('says a body could not be decompressed rather than shipping it unread', async () => {
+    const built = await buildEvidenceBundle(
+      source(withResponseBody(Buffer.from('this is not brotli at all', 'utf8'), 'br')),
+    );
+    const exchange = exchangeFile(readZip(built.zip)).toString('utf8');
+
+    expect(exchange).toContain('could not be decompressed');
+    // Unreadable is unredactable: a bundle labelled REDACTED must not carry
+    // bytes nothing inspected, however plausible they look as text.
+    expect(exchange).not.toContain('this is not brotli at all');
+  });
+
+  it('writes a raw body byte for byte instead of through a lossy UTF-8 decode', async () => {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x80]);
+    const built = await buildEvidenceBundle(source(withResponseBody(bytes)), {
+      includeRawCaptures: true,
+    });
+    // `toString('utf8')` replaces every one of these with U+FFFD, which is a
+    // body a triager cannot do anything with — and cannot get back.
+    expect(exchangeFile(readZip(built.zip)).includes(bytes)).toBe(true);
+  });
+
+  it('caps a raw body at the same size the redacted one is capped at', async () => {
+    const built = await buildEvidenceBundle(
+      source(withResponseBody(Buffer.alloc(600 * 1024, 0x41))),
+      { includeRawCaptures: true },
+    );
+    const file = exchangeFile(readZip(built.zip));
+
+    // The redacted path has always been capped at 256 KiB; the raw path was
+    // bounded only by what `session.ts` reads for viewing, which is 4 MiB.
+    expect(file.length).toBeLessThan(300 * 1024);
+    expect(file.toString('utf8')).toContain('capped at 262144 byte(s) for this bundle');
   });
 });
 
@@ -328,7 +471,9 @@ describe('agent handoff', () => {
   });
 
   it('points each finding at the evidence file that proves it', async () => {
-    const h = (await buildEvidenceBundle(source())).handoff;
+    // Logs are opted into here because they are no longer in a bundle by
+    // default; the assertion that the handoff indexes them is unchanged.
+    const h = (await buildEvidenceBundle(source(), { includeLogs: true })).handoff;
     expect(h.findings).toHaveLength(1);
     const f = h.findings[0];
     expect(f?.evidenceFile).toMatch(/^exchanges\/0001-/);

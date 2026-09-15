@@ -6,7 +6,67 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed — response bodies in an evidence bundle were unreadable, and the file said otherwise
+
+Nearly every HTTPS response is gzip or brotli on the wire, and the proxy stores
+what the wire carried. The bundle UTF-8-decoded those bytes, which destroys
+them: the response bodies — the substance of the evidence — reached a triager as
+mojibake, and the original was not recoverable from the file.
+
+The label above them was worse than the damage. A redacted bundle printed
+`# content: REDACTED (credentials and secret patterns masked)` over bytes the
+redactor had never been able to read, because it cannot match a pattern in
+compressed data. The claim was unverifiable rather than merely wrong. A raw
+bundle printed `RAW as captured` over the same lossy decode.
+
+Bodies are now decompressed first, through the same `maxOutputLength`-guarded
+helper the redactor and the passive scanner already used — one decompressor, so
+there is one place to keep the bomb guard. The `# content:` line says per body
+what happened to it, and a body that cannot be decompressed is named as such
+instead of being emitted as noise: on the redacted path it is omitted outright,
+since unreadable is unredactable and a bundle that says `REDACTED` must not
+carry bytes nothing inspected. Raw bodies are written byte for byte rather than
+through a string, and the documented 256 KiB per-body cap now binds on the raw
+path too — it applied only to the redacted one, so a raw bundle carried up to
+4 MiB per message.
+
+### Fixed — a bundle for one target carried the whole project
+
+`bundle.ts` opens by saying why exact host matching is load-bearing: anything
+looser "would hand a triager another target's traffic." Exchanges, findings and
+audit rows honoured it. Two sections never had.
+
+The **engine briefing** was rendered verbatim into `HANDOFF.md` and
+`handoff.json`, and it is built from the whole project: every in-scope endpoint
+the proxy has ranked, the absolute path of the engagement folder, and up to
+twenty of its filenames — which in practice are named after the client. Export a
+bundle for host A with host B in the same project, and B's endpoints and the
+folder's name went with it. The briefing is now asked for **by host**: it ranks
+only that host's endpoints, drops the engagement folder entirely, and drops
+per-check preflight detail, where the local CA's subject and fingerprint live.
+The full briefing is unchanged for the live UI and the mesh, neither of which
+leaves the machine.
+
+The **session log tail** shipped by default with no host filter at all, and the
+proxy logs a line per host it touches. It is now an opt-in the operator makes
+deliberately, alongside raw captures, with a checkbox in the target view.
+Filtering it was the alternative and is the wrong one: many records carry no
+host, others name one only inside free text, and deciding by substring is
+exactly what rule 3 exists to forbid — a filtered tail would also present itself
+as a whole log.
+
+### Fixed — the log tail outlived the project it described
+
+`LogBuffer` is built once per session and the session outlives every project
+opened in it, so nothing ever cleared it. Work on one engagement, open the next,
+export: up to 5000 of the previous client's records went out inside the new
+project's bundle or diagnostics. `closeProject()` now clears the tail, which
+covers opening and creating a project alike, since both close first.
+
+The test that should have caught the briefing leak was structurally unable to:
+its fixtures returned a one-line briefing and a one-line log that could not
+mention the impostor host, so the assertion guarding against exactly this passed
+by never being exercised. Both fixtures now carry the impostor.
 
 ## [0.5.8] — 2026-09-15
 

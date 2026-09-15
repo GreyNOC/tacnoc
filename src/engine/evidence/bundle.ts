@@ -18,12 +18,19 @@
  *     substring match, which also matches `notexample.com.evil.net`. A bundle
  *     built on that would hand a triager another target's traffic, so the
  *     caller filters exactly and this module re-checks.
+ *
+ * Rule 3 binds every section, not only the ones that obviously carry traffic.
+ * Two of them used to sit outside it: the engine briefing arrived pre-rendered
+ * from the whole project, so a bundle for one host listed another's ranked
+ * endpoints and the engagement folder named after the client; and the session
+ * log tail went in by default with no host filter at all. The briefing is now
+ * asked for by host, and logs are an opt-in the operator makes deliberately.
  */
 
 import { createHash } from 'node:crypto';
 import type { AuditEntry } from '../../shared/project.js';
 import type { EngagementProfile } from '../../shared/engagement.js';
-import type { ExchangeDetail } from '../../shared/detail.js';
+import type { ExchangeDetail, MessageDetail } from '../../shared/detail.js';
 import type { ExchangeSummary } from '../../shared/query.js';
 import type { Finding } from '../../shared/findings.js';
 import type { HttpHeader } from '../../shared/model.js';
@@ -37,10 +44,17 @@ import type {
   EvidenceBundleSummary,
 } from '../../shared/evidence.js';
 import type { Redactor } from '../redaction/redactor.js';
+import { tryDecompress } from '../redaction/redactor.js';
 import { buildHandoff, renderHandoffMarkdown } from './handoff.js';
 import { buildZip, listZip, type ZipEntry } from './zip.js';
 
-/** Bodies are capped per message so one large response cannot dominate a bundle. */
+/**
+ * Bodies are capped per message so one large response cannot dominate a bundle.
+ *
+ * The cap binds on both paths. It used to apply only to the redacted one, so a
+ * raw bundle carried whatever `session.ts` was willing to read for viewing —
+ * 4 MiB per message — while the file it sat next to was capped at 256 KiB.
+ */
 const MAX_BODY_CHARS = 256 * 1024;
 const DEFAULT_MAX_EXCHANGES = 500;
 
@@ -58,7 +72,14 @@ export interface BundleSource {
   detail: (id: string) => Promise<ExchangeDetail | undefined>;
   findings: Finding[];
   audit: AuditEntry[];
-  engineBriefing: () => Promise<string>;
+  /**
+   * The engine's own recon, narrowed to `host`. It is asked for by host because
+   * the unnarrowed briefing ranks every site in the project — a bundle is for
+   * one target, and what the project knows about the others is not the
+   * recipient's.
+   */
+  engineBriefing: (host: string) => Promise<string>;
+  /** The session log tail. Written only when the operator opts in; see `includeLogs`. */
   logs: { jsonl: string; count: number; dropped: number } | null;
   redactor: Redactor;
   targetInScope: boolean;
@@ -87,68 +108,136 @@ function renderHeaders(headers: readonly HttpHeader[], redactor: Redactor, raw: 
   return list.map((h) => `${h.name}: ${h.value}`).join('\n');
 }
 
-function renderBody(base64: string, redactor: Redactor, raw: boolean): string {
-  if (!base64) return '';
-  const bytes = Buffer.from(base64, 'base64');
-  if (raw) return bytes.toString('utf8');
-  return redactor.redactBodyText(bytes, MAX_BODY_CHARS);
+const NEWLINE = Buffer.from('\n', 'utf8');
+const NO_BYTES = Buffer.alloc(0);
+
+interface RenderedBody {
+  /** Exactly what to write. Bytes, not text — the raw path must not re-encode. */
+  bytes: Uint8Array;
+  /** What happened on the way here, for the `# content:` line. */
+  note?: string;
+}
+
+/**
+ * A captured body as something a reader can act on.
+ *
+ * `ExchangeDetail.bodyBase64` holds what the wire carried, which for nearly
+ * every HTTPS response means gzip or br. Decoding those bytes as UTF-8 — which
+ * is all this used to do — destroys them, so response bodies, the substance of
+ * the evidence, arrived as mojibake. Worse, the file said `REDACTED` above
+ * them: the redactor cannot mask a pattern in bytes it cannot read, so the
+ * label was a claim about work that had not happened.
+ *
+ * Decompress first, with the same guarded helper the redactor and the passive
+ * scanner already use. When that is impossible, say so — and on the redacted
+ * path drop the body rather than ship bytes nothing has inspected.
+ */
+function renderBody(msg: MessageDetail, redactor: Redactor, raw: boolean): RenderedBody {
+  if (!msg.bodyBase64) return { bytes: NO_BYTES };
+  const stored = Buffer.from(msg.bodyBase64, 'base64');
+  const encoding = msg.contentEncoding?.trim();
+  let bytes: Uint8Array = stored;
+  let note: string | undefined;
+
+  if (encoding && encoding.toLowerCase() !== 'identity') {
+    const plain = tryDecompress(stored, encoding);
+    if (plain) {
+      bytes = plain;
+      note = `decompressed from ${encoding}`;
+    } else if (raw) {
+      // A raw bundle promises the captured bytes, and compressed-as-captured
+      // still keeps that promise — the reader can decompress it themselves.
+      note = `left ${encoding}-compressed; it could not be decompressed here`;
+    } else {
+      return {
+        bytes: Buffer.from(
+          `[body omitted — Content-Encoding ${encoding} could not be decompressed, so it could ` +
+            `not be redacted; ${msg.bodySize} byte(s) captured]`,
+          'utf8',
+        ),
+        note: `${encoding} body omitted — unreadable here, therefore unredactable`,
+      };
+    }
+  }
+
+  const overCap = bytes.length > MAX_BODY_CHARS;
+  const out = raw
+    ? bytes.subarray(0, MAX_BODY_CHARS)
+    : Buffer.from(redactor.redactBodyText(bytes, MAX_BODY_CHARS), 'utf8');
+  const notes = [note, overCap ? `capped at ${MAX_BODY_CHARS} byte(s) for this bundle` : undefined]
+    .filter((n): n is string => n !== undefined)
+    .join(', ');
+  return notes ? { bytes: out, note: notes } : { bytes: out };
 }
 
 /**
  * One exchange as something close to what went over the wire. Close, not exact:
- * redaction rewrites values, and the body is decoded text rather than the
- * original compressed bytes. The header block says which.
+ * redaction rewrites values, and a compressed body is written decompressed. The
+ * header block says which, per body, so a reader never has to infer it.
  */
-function renderExchange(d: ExchangeDetail, redactor: Redactor, raw: boolean): string {
+function renderExchange(d: ExchangeDetail, redactor: Redactor, raw: boolean): Buffer {
   const url = raw ? d.request.url : redactor.redactUrl(d.request.url);
-  const L: string[] = [
+  const requestBody = renderBody(d.request, redactor, raw);
+  const responseBody = d.response ? renderBody(d.response, redactor, raw) : undefined;
+  const bodyNotes = [
+    requestBody.note ? `request body ${requestBody.note}` : undefined,
+    responseBody?.note ? `response body ${responseBody.note}` : undefined,
+  ].filter((n): n is string => n !== undefined);
+
+  // Text lines and body bytes, kept apart: a line becomes UTF-8, a body is
+  // written as it stands. Re-encoding a raw body through a string is the lossy
+  // step this file is here to avoid.
+  const chunks: (string | Uint8Array)[] = [
     `# TACNOC exchange ${d.id}`,
     `# captured: ${new Date(d.createdAt).toISOString()}`,
     `# source: ${d.source}${d.automated ? ' (automated)' : ''}  in-scope: ${d.inScope ? 'yes' : 'no'}`,
     `# url: ${url}`,
-    `# content: ${raw ? 'RAW as captured' : 'REDACTED (credentials and secret patterns masked)'}`,
+    `# content: ${raw ? 'RAW as captured' : 'REDACTED (credentials and secret patterns masked)'}` +
+      (bodyNotes.length ? `; ${bodyNotes.join('; ')}` : ''),
   ];
-  if (d.error) L.push(`# error: ${d.error}`);
-  if (d.timing?.durationMs !== undefined) L.push(`# duration: ${d.timing.durationMs} ms`);
-  if (d.tags.length) L.push(`# tags: ${d.tags.join(', ')}`);
+  if (d.error) chunks.push(`# error: ${d.error}`);
+  if (d.timing?.durationMs !== undefined) chunks.push(`# duration: ${d.timing.durationMs} ms`);
+  if (d.tags.length) chunks.push(`# tags: ${d.tags.join(', ')}`);
   if (d.request.sensitive.fields.length) {
-    L.push(`# request carries: ${d.request.sensitive.fields.join(', ')}`);
+    chunks.push(`# request carries: ${d.request.sensitive.fields.join(', ')}`);
   }
-  L.push('');
-  L.push('===== REQUEST =====');
+  chunks.push('');
+  chunks.push('===== REQUEST =====');
   // The request target is origin-form, so it carries the query string: a
   // capture of `/callback?code=...` puts the credential on the request line
   // itself. Redacting only the `# url:` comment above left it in the clear in a
   // bundle that says it is redacted. `redactUrl` is pure string work — it finds
   // `?` and masks sensitive parameter values — so it applies to a bare target.
   const target = raw ? d.request.target : redactor.redactUrl(d.request.target);
-  L.push(`${d.request.method} ${target} ${d.request.httpVersion}`);
-  L.push(renderHeaders(d.request.headers, redactor, raw));
-  L.push('');
-  const reqBody = renderBody(d.request.bodyBase64, redactor, raw);
-  if (reqBody) L.push(reqBody);
+  chunks.push(`${d.request.method} ${target} ${d.request.httpVersion}`);
+  chunks.push(renderHeaders(d.request.headers, redactor, raw));
+  chunks.push('');
+  if (requestBody.bytes.length) chunks.push(requestBody.bytes);
   if (d.request.bodyTruncated || d.request.truncatedForView) {
-    L.push(`[body truncated — ${d.request.bodySize} byte(s) captured]`);
+    chunks.push(`[body truncated — ${d.request.bodySize} byte(s) captured]`);
   }
-  L.push('');
-  if (d.response) {
-    L.push('===== RESPONSE =====');
-    L.push(
+  chunks.push('');
+  chunks.push('===== RESPONSE =====');
+  if (d.response && responseBody) {
+    chunks.push(
       `${d.response.httpVersion} ${d.response.statusCode} ${d.response.statusMessage}`.trimEnd(),
     );
-    L.push(renderHeaders(d.response.headers, redactor, raw));
-    L.push('');
-    const resBody = renderBody(d.response.bodyBase64, redactor, raw);
-    if (resBody) L.push(resBody);
+    chunks.push(renderHeaders(d.response.headers, redactor, raw));
+    chunks.push('');
+    if (responseBody.bytes.length) chunks.push(responseBody.bytes);
     if (d.response.bodyTruncated || d.response.truncatedForView) {
-      L.push(`[body truncated — ${d.response.bodySize} byte(s) captured]`);
+      chunks.push(`[body truncated — ${d.response.bodySize} byte(s) captured]`);
     }
   } else {
-    L.push('===== RESPONSE =====');
-    L.push('(none recorded — the request was held, aborted, or errored)');
+    chunks.push('(none recorded — the request was held, aborted, or errored)');
   }
-  L.push('');
-  return L.join('\n');
+
+  const parts: Uint8Array[] = [];
+  for (const chunk of chunks) {
+    parts.push(typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk);
+    parts.push(NEWLINE);
+  }
+  return Buffer.concat(parts);
 }
 
 function renderFindingsMarkdown(findings: Finding[], host: string): string {
@@ -237,7 +326,12 @@ export async function buildEvidenceBundle(
   options: EvidenceBundleOptions = {},
 ): Promise<BuiltBundle> {
   const raw = options.includeRawCaptures === true;
-  const includeLogs = options.includeLogs !== false && src.logs !== null;
+  // Opt-in, like raw captures. The tail is session-wide and has no reliable
+  // host attribution — plenty of records carry no host at all, and others name
+  // one only inside free text — so a "single target" bundle used to ship every
+  // host the proxy had seen. Filtering it would be the same substring guesswork
+  // rule 3 forbids, and would quietly present a partial log as a whole one.
+  const includeLogs = options.includeLogs === true && src.logs !== null;
   const includeHandoff = options.includeHandoff !== false;
   const host = src.host.trim().toLowerCase();
   if (!host) throw new Error('An evidence bundle needs a target host.');
@@ -345,7 +439,7 @@ export async function buildEvidenceBundle(
     findings,
     exchangeFiles,
     audit: src.audit,
-    engineBriefing: await src.engineBriefing(),
+    engineBriefing: await src.engineBriefing(host),
     evidence,
     redacted: !raw,
     targetInScope: src.targetInScope,
