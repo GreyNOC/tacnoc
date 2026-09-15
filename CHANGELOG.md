@@ -6,7 +6,37 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed — the macOS "signing" secrets never signed anything
+
+`release.yml` treated `APPLE_ID` as evidence that a macOS signing identity
+existed. It is not one. On macOS the **certificate** and the **notarization
+credentials** are separate, and only the certificate produces a signature:
+electron-builder reads a Developer ID Application .p12 from `CSC_LINK` (importing
+it into a throwaway keychain of its own), while the `APPLE_*` trio is read only
+by `notarytool`, after a signature exists. The workflow's one certificate secret
+was `WINDOWS_CSC_LINK` — Windows-specific — so the `macos-latest` leg had no way
+to obtain a certificate at all, and RELEASE.md advertised a
+"macOS Developer ID + notarization" row that could not be satisfied.
+
+The failure was silent, which is the worst part. `MacPackager.sign()` returns
+early when no identity is found and the notarization call sits *after* that
+return, so an operator who configured all three advertised `APPLE_*` secrets got
+an **unsigned, un-notarized artifact and no error** — and, because `APPLE_ID` was
+set, the old guard also left `CSC_IDENTITY_AUTO_DISCOVERY` on, so the build
+searched an empty runner keychain instead of saying it had nothing to sign with.
+
+- **`APPLE_CSC_LINK` / `APPLE_CSC_KEY_PASSWORD`** carry the Developer ID
+  certificate, and the macOS branch now gates on it exactly as Windows gates on
+  `WINDOWS_CSC_LINK`. No `security import` step is needed — electron-builder
+  imports a base64 .p12 itself.
+- **`APPLE_*` set without a certificate now warns** that notarization is being
+  skipped entirely rather than silently producing an unsigned build, and a
+  partly-configured notarization trio fails fast with an `::error::` instead of
+  dying after a full sign-and-package.
+- **`Report signing status` reports per-OS on the certificate.** It tested the
+  union of every secret, so any one platform being configured made all three
+  runners claim "artifacts should be signed" — including macOS, where `APPLE_ID`
+  alone signs nothing. It also no longer interpolates secrets into a script body.
 
 ## [0.5.7] — 2026-09-15
 

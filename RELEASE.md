@@ -91,21 +91,45 @@ every unit/dev-E2E test stays green. Do not cut a release without this passing.
 a decision for the operator:
 
 - **Windows:** set an Authenticode certificate (`CSC_LINK` / `CSC_KEY_PASSWORD`).
-- **macOS:** set a Developer ID identity and enable `hardenedRuntime` +
-  notarization.
+- **macOS:** set a Developer ID Application **certificate** — that is what
+  signs — and, separately, notarization credentials; then enable
+  `hardenedRuntime` + `notarize`.
 - **Linux:** AppImage/tar.gz are typically distributed with detached checksums.
+
+### Signing and notarization are not the same credential (macOS)
+
+Worth stating plainly, because the workflow got this wrong from the moment CI
+signing was first documented:
+
+- The **certificate** (`CSC_LINK` + `CSC_KEY_PASSWORD`, a base64 Developer ID
+  Application .p12) is the only thing that produces a **signature**.
+  electron-builder imports it into a throwaway keychain by itself, so no
+  `security import` step is needed.
+- The **`APPLE_*` trio** is read only by `notarytool`, which runs *after* a
+  signature exists.
+
+`MacPackager.sign()` returns early when it finds no identity, and the
+notarization call sits after that return. So configuring **only** the `APPLE_*`
+secrets does not fail loudly — it produces an **unsigned, un-notarized artifact
+with no error at all**, and the notarization credentials are never read. The
+workflow now gates macOS on the certificate and warns when the `APPLE_*` values
+are set without one.
 
 ### CI signing activation
 
 `release.yml` passes signing secrets to `electron-builder` as env vars. Signing
-activates **automatically and only** when the matching secrets are set in the
-repository; with none set, artifacts are UNSIGNED (the build does not fail) and a
-`::warning::` is emitted. Configure:
+activates **automatically and only** when the matching **certificate** secret is
+set in the repository; with none set, artifacts are UNSIGNED (the build does not
+fail) and a `::warning::` is emitted. Configure:
 
 | Purpose | Repository secrets |
 |---|---|
-| Windows Authenticode | `WINDOWS_CSC_LINK` (base64 .pfx), `WINDOWS_CSC_KEY_PASSWORD` |
-| macOS Developer ID + notarization | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` |
+| Windows Authenticode (signs) | `WINDOWS_CSC_LINK` (base64 .pfx), `WINDOWS_CSC_KEY_PASSWORD` |
+| macOS Developer ID (signs) | `APPLE_CSC_LINK` (base64 .p12), `APPLE_CSC_KEY_PASSWORD` |
+| macOS notarization (needs the above) | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` |
+
+The three notarization secrets are all-or-nothing: set partially, the macOS leg
+fails fast with an `::error::` rather than after a full sign-and-package.
 
 For macOS notarization also enable `mac.hardenedRuntime` and `mac.notarize` in
 `electron-builder.yml` (left off by default so unsigned/dev builds don't fail).

@@ -38,8 +38,8 @@ jobs:
         run: npm run audit
       - name: Build installers
         # Code signing activates automatically ONLY when the corresponding
-        # secrets are configured; otherwise electron-builder produces UNSIGNED
-        # artifacts (it does not fail). See RELEASE.md.
+        # CERTIFICATE secret is configured; otherwise electron-builder produces
+        # UNSIGNED artifacts (it does not fail). See RELEASE.md.
         #
         # The signing variables are exported per-OS, in the shell, rather than
         # in `env:` — because a GitHub expression that evaluates to nothing sets
@@ -49,12 +49,27 @@ jobs:
         # fails with "<projectDir> not a file". That is exactly what killed the
         # v0.5.4 macOS leg — a *Windows* Authenticode variable was being handed
         # to all three runners, and macOS is where it is fatal.
+        #
+        # On macOS, signing and notarization are SEPARATE credentials and only
+        # the certificate produces a signature. electron-builder takes the
+        # Developer ID from CSC_LINK and imports it into a throwaway keychain
+        # (app-builder-lib MacPackager.codeSigningInfo -> createKeychain), so a
+        # base64 .p12 needs no `security import` step of its own. The APPLE_*
+        # trio is read only by MacTargetHelper.getNotarizeOptions — notarytool,
+        # which runs after a signature exists. MacPackager.sign() returns early
+        # when no identity is found, and notarizeIfProvided sits after that
+        # return: an APPLE_*-only configuration is therefore silently INERT —
+        # unsigned, unnotarized, and no error. So gate macOS on the certificate,
+        # exactly as Windows is gated, and never on APPLE_ID.
         shell: bash
         env:
-          # Windows Authenticode (set both to enable):
+          # Windows Authenticode — this is what signs (set both to enable):
           WINDOWS_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
           WINDOWS_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
-          # macOS Developer ID + notarization (set all to enable):
+          # macOS Developer ID Application certificate — this is what signs:
+          APPLE_CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
+          APPLE_CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
+          # macOS notarization — consumed only once a signature exists:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -64,11 +79,30 @@ jobs:
             export CSC_KEY_PASSWORD="$WINDOWS_CSC_KEY_PASSWORD"
             echo "Windows Authenticode certificate configured."
           fi
-          if [ "$RUNNER_OS" = "macOS" ] && [ -z "$APPLE_ID" ]; then
-            # No Developer ID to find. Say so, rather than letting auto-discovery
-            # search the keychain and leave the build unsigned as a side effect.
-            export CSC_IDENTITY_AUTO_DISCOVERY=false
-            echo "No Apple ID configured — macOS identity auto-discovery disabled."
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            if [ -n "$APPLE_CSC_LINK" ]; then
+              export CSC_LINK="$APPLE_CSC_LINK"
+              export CSC_KEY_PASSWORD="$APPLE_CSC_KEY_PASSWORD"
+              echo "macOS Developer ID certificate configured."
+              if [ -z "$APPLE_ID" ]; then
+                echo "::warning::Developer ID certificate present but APPLE_ID is not set — artifacts will be SIGNED but NOT notarized, and Gatekeeper still blocks an un-notarized app on first open."
+              elif [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+                # notarytool needs all three. Say so now, rather than after a
+                # full sign+package, which is where electron-builder raises it.
+                echo "::error::Notarization is partially configured: APPLE_ID is set but APPLE_APP_SPECIFIC_PASSWORD and/or APPLE_TEAM_ID is missing. Set all three, or none."
+                exit 1
+              fi
+            else
+              # No Developer ID to find. Say so, rather than letting
+              # auto-discovery search an empty runner keychain and leave the
+              # build unsigned as a side effect.
+              export CSC_IDENTITY_AUTO_DISCOVERY=false
+              if [ -n "$APPLE_ID" ]; then
+                echo "::warning::APPLE_* notarization credentials are set, but APPLE_CSC_LINK (the Developer ID Application certificate) is not. Notarization only runs after signing, so it is skipped entirely: these artifacts are UNSIGNED and un-notarized."
+              else
+                echo "No Developer ID certificate configured — macOS identity auto-discovery disabled; artifacts will be UNSIGNED."
+              fi
+            fi
           fi
           # `--publish never`: the draft-release job below publishes. Left
           # implicit, electron-builder publishes on a v* tag by itself (it warns
@@ -100,13 +134,40 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: npm run sbom
       - name: Report signing status
+        # Report per-OS, on the CERTIFICATE — the only thing that produces a
+        # signature. Testing the union of every secret told each runner that
+        # "artifacts should be signed" as soon as any one platform was
+        # configured, including macOS, where APPLE_ID alone signs nothing.
+        # APPLE_ID alone is a sufficient test for notarization here: the build
+        # step above exits non-zero on a partly-configured trio, so by the time
+        # this runs the credentials are either all present or all absent.
         shell: bash
+        env:
+          WINDOWS_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          APPLE_CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
         run: |
-          if [ -n "${{ secrets.WINDOWS_CSC_LINK }}${{ secrets.APPLE_ID }}" ]; then
-            echo "Signing secrets present — artifacts should be signed. Verify before publishing."
-          else
-            echo "::warning::No signing secrets configured — artifacts are UNSIGNED. The release is left as a draft."
-          fi
+          case "$RUNNER_OS" in
+            Windows)
+              if [ -n "$WINDOWS_CSC_LINK" ]; then
+                echo "Windows Authenticode certificate configured — artifacts should be signed. Verify before publishing."
+              else
+                echo "::warning::No Windows Authenticode certificate (WINDOWS_CSC_LINK) — artifacts are UNSIGNED. The release is left as a draft."
+              fi
+              ;;
+            macOS)
+              if [ -n "$APPLE_CSC_LINK" ] && [ -n "$APPLE_ID" ]; then
+                echo "macOS Developer ID certificate and notarization credentials configured — artifacts should be signed and notarized. Verify before publishing."
+              elif [ -n "$APPLE_CSC_LINK" ]; then
+                echo "::warning::macOS artifacts are signed but NOT notarized (no APPLE_ID). Gatekeeper still blocks them on first open."
+              else
+                echo "::warning::No macOS Developer ID certificate (APPLE_CSC_LINK) — artifacts are UNSIGNED. The release is left as a draft."
+              fi
+              ;;
+            *)
+              echo "Linux artifacts are distributed with detached checksums; nothing here is signed."
+              ;;
+          esac
       - uses: actions/upload-artifact@v4
         with:
           name: artifacts-${{ matrix.os }}
