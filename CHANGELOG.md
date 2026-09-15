@@ -8,6 +8,30 @@ All notable changes to TACNOC are documented here. The format follows
 
 _Nothing yet._
 
+## [0.5.7] — 2026-09-15
+
+### Fixed — a TLS test that was really testing the OS port pool
+
+v0.5.6 got the gate running on Windows and macOS, and the very next release run
+failed on Windows again — on a different test, and this time an intermittent
+one. `ca.test.ts` mints a leaf from the project CA and verifies it over a real
+TLS handshake across loopback TCP, and roughly **1 run in 25** failed with a
+transient socket error: either `unable to verify the first certificate` or the
+client socket disconnecting mid-handshake.
+
+The certificates were never the problem. Two probes established that before
+anything was changed: 199 of 200 handshakes verified (the single failure being
+a socket disconnect, with the chain intact), and 60 of 60 verified against
+freshly minted CAs in isolation. A separate check refuted the obvious
+explanation — Windows refuses a second bind to the same loopback port with
+`EADDRINUSE`, with or without `exclusive: true` — so this was ephemeral-port
+churn, not port hijacking.
+
+The handshake now runs over a **named pipe** (Windows) or a Unix socket, which
+has no port to recycle and nothing in `TIME_WAIT`. It is the same real
+handshake: same certificates, same SNI, same verification against the CA. Over
+60 consecutive runs it did not fail once.
+
 ## [0.5.6] — 2026-09-15
 
 ### Fixed — the gate never ran on the platforms the release builds for
