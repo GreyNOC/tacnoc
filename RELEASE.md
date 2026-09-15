@@ -229,8 +229,35 @@ Gate on this workstation: `npm run ci` green, `npm run test:e2e` 10/10 in the
 real Electron runtime, full-tree `npm audit` 0 at every level, SBOM regenerated.
 The macOS packaging path cannot be exercised here at all — this is a Windows
 host — so, as with the v0.5.4 test fix, the `macos-latest` leg of the release
-run is the verification. The run, the artifacts, and their SHA-256 manifests are
-recorded below once it completes.
+run is the verification.
+
+**The macOS fix worked. This release still produced no artifacts.** Run
+`35020717338`: `macos-latest` **passed** in 3m15s and `ubuntu-latest` **passed**
+in 6m21s — both built, verified the packaged binary, checksummed and uploaded —
+and `windows-latest` failed at the quality gate, so `draft-release` (which
+needs every leg) did not run. `fail-fast: false` is what made that legible:
+under the old setting the first failure would have cancelled the two green legs
+and the run would have said nothing about either.
+
+The Windows failure was `storage.test.ts` spending 86,034 ms against a 20,000 ms
+timeout on 2050 row-at-a-time inserts — synchronous, so the timeout could not
+fire until they finished. Fixed in v0.5.6, along with the reason it reached a
+tag at all: `ci.yml` ran the gate only on `ubuntu-latest`. The `v0.5.5` tag
+stays where it is, and marks a third version with no artifacts.
+
+### v0.5.6 — cut UNSIGNED, built by CI (operator decision, 2026-09-15)
+
+`v0.5.6` is v0.5.5 plus a bulk-insert path (`HistoryRepo.insertMany`, one
+transaction instead of 2050 durable commits) and a `ci.yml` that runs the gate
+on all three platforms `release.yml` builds for, so the next platform-specific
+defect is caught in a pull request rather than on a tag. No application
+behaviour changed.
+
+Gate on this workstation: `npm run ci` green, `npm run test:e2e` 10/10 in the
+real Electron runtime, full-tree `npm audit` 0 at every level, SBOM regenerated.
+The previously-failing test measured **86,034 ms on CI Windows → 249 ms here**
+after batching. The run, the artifacts, and their SHA-256 manifests are recorded
+below once it completes.
 
 ### v0.5.3 — cut UNSIGNED (operator decision, 2026-09-03)
 

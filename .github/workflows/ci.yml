@@ -11,9 +11,22 @@ on:
     branches: [master, main]
 
 jobs:
+  # The gate runs on every OS the release matrix builds on.
+  #
+  # It used to run only on ubuntu, and release.yml runs it on all three — so the
+  # first time the gate ever saw Windows or macOS was on a pushed tag, when it
+  # is far too late. That gap cost two releases: v0.5.3 died on a macOS-only
+  # path assertion, and v0.5.5 on a Windows-only test timeout, both of which a
+  # PR run on those platforms would have caught for a few minutes of CI.
   quality:
-    name: format · lint · typecheck · test
-    runs-on: ubuntu-latest
+    name: format · lint · typecheck · test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Platform-specific failures are the entire point of this matrix; cancelling
+      # the others on the first one would hide exactly what it exists to surface.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,6 +42,20 @@ jobs:
         run: npm run typecheck
       - name: Unit + integration tests
         run: npm test
+
+  # Building and driving the GUI stays on Linux only: it needs xvfb, and the
+  # renderer/CSP regressions it catches are not platform-specific. The packaged
+  # binary is exercised per-OS by release.yml, which is where that matters.
+  e2e:
+    name: build · GUI E2E (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
       - name: Build app bundles
         run: npm run build
       - name: Install E2E system deps

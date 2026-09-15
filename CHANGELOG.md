@@ -8,6 +8,36 @@ All notable changes to TACNOC are documented here. The format follows
 
 _Nothing yet._
 
+## [0.5.6] — 2026-09-15
+
+### Fixed — the gate never ran on the platforms the release builds for
+
+v0.5.5 fixed macOS packaging and both macOS and Linux went green, producing
+artifacts for the first time. Windows then failed — at the quality gate, on a
+test that passes everywhere else.
+
+- **A bulk insert took 86 seconds on a Windows runner.** `storage.test.ts`
+  builds 2050 exchanges to prove `export()` pages past its 2000-row page size,
+  one `insert` at a time. Each insert is its own durable commit — WAL is
+  unsupported by the WASM VFS, so every row pays a full journal round-trip — and
+  the inserts are *synchronous*, so the 20-second test timeout could not even
+  fire until the block finished: the runner reported 86,034 ms against a 20,000
+  ms limit. `HistoryRepo.insertMany` now wraps a batch in one transaction, which
+  is the right shape for a bulk load and wrong for captured traffic (which keeps
+  committing per request, on purpose). The test: **86,034 ms → 249 ms.**
+
+### Changed
+
+- **`ci.yml` runs the gate on Windows and macOS too**, matching the platforms
+  `release.yml` builds on. It ran only on `ubuntu-latest`, and the release
+  workflow runs it on all three — so the first time the gate ever saw the other
+  two was on a pushed tag. That gap cost two releases in a row: v0.5.3 died on a
+  macOS-only path comparison, v0.5.5 on this Windows-only timeout, and a PR run
+  on those platforms would have caught both for a few minutes of CI. Building
+  and driving the GUI stays Linux-only in its own job — it needs xvfb, and the
+  CSP/renderer regressions it catches are not platform-specific; the packaged
+  binary is still exercised per-OS by `release.yml`.
+
 ## [0.5.5] — 2026-09-15
 
 ### Fixed — the release workflow could not sign, so it could not build
