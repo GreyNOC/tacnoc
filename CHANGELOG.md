@@ -38,6 +38,42 @@ searched an empty runner keychain instead of saying it had nothing to sign with.
   runners claim "artifacts should be signed" — including macOS, where `APPLE_ID`
   alone signs nothing. It also no longer interpolates secrets into a script body.
 
+## [0.5.8] — 2026-09-15
+
+### Fixed — about 1 host in 512 could not be intercepted at all
+
+A real interception defect, surfaced by a release run rather than by use, which
+is the only reason it was ever found: it fails intermittently and blames ASN.1.
+
+Certificate serial numbers were minted as `'00' + 15 random bytes`. That makes
+the integer positive, which was the intent — but DER also requires an INTEGER to
+be **minimally encoded**, with no redundant leading zero byte. node-forge strips
+exactly one leading zero when it writes the DER, so whenever the first random
+byte was *also* `0x00` and the next had its high bit clear, the encoding kept a
+redundant zero.
+
+OpenSSL 3 refuses such a certificate outright, from `tls.createSecureContext` —
+the call that turns every minted leaf into a usable context:
+
+```
+error:068000DD:asn1 encoding routines::illegal padding
+```
+
+So roughly **1 leaf in 512** threw instead of producing a context, and HTTPS
+interception for that host simply failed, with an ASN.1 error and nothing
+pointing at the cause. A newly issued CA was unusable at the same rate. Measured
+directly: **9 rejected out of 6000** with the old generator, **0 out of 6000**
+with the new one.
+
+The first byte is now forced into `0x01..0x7f` — positive, non-zero and minimal
+by construction, with no leading zero to strip — keeping 127 bits of entropy,
+well above the 64-bit CA/Browser Forum floor.
+
+Two regression tests, both deterministic rather than probabilistic: one asserts
+every minted serial survives a DER round trip at full length (the old generator
+fails it on the first leaf), and one pins the mechanism by building certificates
+with a known-bad and known-good serial and asserting OpenSSL's verdict on each.
+
 ## [0.5.7] — 2026-09-15
 
 ### Fixed — a TLS test that was really testing the OS port pool

@@ -307,6 +307,40 @@ and the 60 runs are corroboration rather than proof.
 
 Gate on this workstation: `npm run ci` green, `npm run test:e2e` 10/10 in the
 real Electron runtime, full-tree `npm audit` 0 at every level, SBOM regenerated.
+
+**The flake fix worked. Windows and Linux both passed — and macOS found a real
+bug.** Run `35024875199`: `windows-latest` passed in 5m18s (the TLS handshake
+case included) and `ubuntu-latest` in 5m54s, both building and verifying their
+artifacts; `macos-latest` failed the quality gate on the same handshake test,
+but for an entirely different reason — `tls.createSecureContext` rejecting a
+minted leaf with `asn1 encoding routines::illegal padding`. That is not a test
+problem. It is an interception defect that hit about 1 host in 512, fixed in
+v0.5.8. The `v0.5.7` tag stays where it is, and marks a fifth version with no
+artifacts.
+
+Worth stating plainly, because it is the argument for the whole three-OS gate:
+this bug had been in every release since the CA existed, it is invisible on
+Windows and Linux most of the time, and it took a macOS runner drawing an
+unlucky 16 bytes to expose it.
+
+### v0.5.8 — cut UNSIGNED, built by CI (operator decision, 2026-09-15)
+
+`v0.5.8` fixes the certificate serial-number encoding. See `CHANGELOG.md`; the
+short version is that serials were `'00' + 15 random bytes`, which is positive
+but not always *minimally* encoded, and OpenSSL 3 refuses a non-minimal INTEGER.
+Measured: 9 certificates rejected out of 6000 with the old generator, 0 out of
+6000 with the new one. Two deterministic regression tests cover it — the
+round-trip one fails on the first leaf under the old generator, which was
+verified by reverting the fix and re-running rather than assumed.
+
+This is the first change in the v0.5.3–0.5.8 sequence that alters shipped
+behaviour: certificates minted after it will differ from ones minted before, and
+an operator who happened to hit the bad path will find interception working for
+a host that previously failed. No CA needs reissuing — an existing CA that works
+is unaffected — but a CA that was *never* usable should be reissued.
+
+Gate on this workstation: `npm run ci` green, `npm run test:e2e` 10/10 in the
+real Electron runtime, full-tree `npm audit` 0 at every level, SBOM regenerated.
 The run, the artifacts, and their SHA-256 manifests are recorded below once it
 completes.
 
