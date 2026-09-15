@@ -31,6 +31,13 @@ uses a throwaway self-signed cert (`test/server/selfSignedCert.ts`).
 
 | Required scenario | Where |
 |---|---|
+| Evidence bundle carries **only** the exact host, never a name that merely contains it | `evidenceBundle.test.ts` |
+| Evidence bundle redacts credentials by default; raw is opt-in and announced in README, HANDOFF and manifest | `evidenceBundle.test.ts` |
+| Evidence bundle never carries a secret store, private key or database | `evidenceBundle.test.ts` |
+| Bundle manifest hashes match the bytes shipped, and the reported bundle hash matches the file written | `evidenceBundle.test.ts` |
+| Agent handoff leads with a STOP CONDITION when scope is empty or the target is out of scope | `evidenceBundle.test.ts` |
+| ZIP round-trips, detects corruption/truncation, and opens in an extractor this project did not write | `zip.test.ts` |
+| Handing a target to the mesh is refused by the same gates a manual run faces (empty scope, out-of-scope host, missing key) | `e2e/evidence-handoff.spec.ts` |
 | Proxying ordinary HTTP | `proxy.test.ts` |
 | HTTPS interception with a temporary CA | `proxy.test.ts`, `ca.test.ts` |
 | CONNECT tunnels | `proxy.test.ts` (HTTPS MITM path) |
