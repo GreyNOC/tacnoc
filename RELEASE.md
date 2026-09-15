@@ -339,6 +339,19 @@ an operator who happened to hit the bad path will find interception working for
 a host that previously failed. No CA needs reissuing — an existing CA that works
 is unaffected — but a CA that was *never* usable should be reissued.
 
+`v0.5.8` also carries a `release.yml` signing fix that never reached a tag under
+its own version. The macOS leg gated code signing on `APPLE_ID`, which is a
+**notarization** credential — the certificate is what signs, and the only
+certificate secret in the workflow was Windows-specific, so the advertised
+"macOS Developer ID + notarization" configuration could not be satisfied by any
+combination of secrets. Worse, it failed silently: `MacPackager.sign()` returns
+before `notarizeIfProvided`, so setting all three `APPLE_*` secrets produced an
+unsigned, un-notarized artifact and exit 0. macOS now gates on
+`APPLE_CSC_LINK` / `APPLE_CSC_KEY_PASSWORD` exactly as Windows gates on
+`WINDOWS_CSC_LINK`. This changes nothing about **this** cut — it is still
+UNSIGNED, by the same operator decision — but the path is now correct for the
+first cut that configures a certificate.
+
 Gate on this workstation: `npm run ci` green, `npm run test:e2e` 10/10 in the
 real Electron runtime, full-tree `npm audit` 0 at every level, SBOM regenerated.
 The run, the artifacts, and their SHA-256 manifests are recorded below once it

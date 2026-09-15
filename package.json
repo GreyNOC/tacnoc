@@ -32,7 +32,8 @@
     "dist:linux": "node scripts/package-linux.mjs",
     "dist:dir": "npm run build && electron-builder --dir",
     "checksums": "node scripts/checksums.mjs",
-    "release:prepare": "npm run ci && npm run audit && npm run sbom"
+    "release:prepare": "npm run ci && npm run audit && npm run sbom",
+    "brand": "node scripts/generate-brand.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",

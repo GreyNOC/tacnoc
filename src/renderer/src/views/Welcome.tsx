@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.js';
+import { OwlMark } from '../components/OwlMark.js';
 
 export function Welcome(): JSX.Element {
   const s = useStore();
@@ -103,7 +104,10 @@ export function Welcome(): JSX.Element {
   return (
     <div className="welcome">
       <div className="card">
-        <h2 style={{ marginTop: 0 }}>TACNOC</h2>
+        <div className="brand-hero">
+          <OwlMark className="brand-hero-mark" title="GreyNOC" />
+          <h2>TACNOC</h2>
+        </div>
         <p className="hint">
           An extensible web-application security research suite for{' '}
           <strong>authorized testing</strong>. The proxy binds to 127.0.0.1, and nothing leaves the

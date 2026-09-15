@@ -8,7 +8,12 @@ release/
 out/
 dist/
 dist-electron/
-build/
+# `build/` is electron-builder's buildResources directory — an INPUT, not output.
+# Ignore everything generated in it but keep the committed app icon, or CI builds
+# an unbranded installer. (The negation needs `build/*`, not `build/`: git cannot
+# re-include a file whose parent directory is itself excluded.)
+build/*
+!build/icon.png
 *.tsbuildinfo
 
 # Generated release artifacts
