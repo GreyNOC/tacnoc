@@ -1,5 +1,6 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import * as tls from 'node:tls';
+import * as forge from 'node-forge';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { promises as fs } from 'node:fs';
@@ -81,6 +82,83 @@ describe('CertificateAuthority', () => {
     server.close();
     expect(authorized).toBe(true);
   });
+
+  // --- serial numbers must be valid DER INTEGERs -------------------------
+  //
+  // These are regressions for a defect that broke real interception, not a
+  // cosmetic one. The serial was `'00' + 15 random bytes`: positive, but
+  // node-forge strips exactly one leading zero when it writes the DER, so if
+  // the first random byte was also 0x00 and the next had its high bit clear,
+  // the encoding kept a redundant leading zero. OpenSSL 3 then refused the
+  // certificate from `tls.createSecureContext` with
+  // `asn1 encoding routines::illegal padding` — roughly 1 leaf in 512, so that
+  // host's HTTPS interception failed outright, and a new CA was unusable at the
+  // same rate. It surfaced as an intermittent macOS release failure.
+
+  it('mints serials that survive a DER round trip without a stripped byte', async () => {
+    const secrets = new InMemorySecretStore();
+    const ca = await CertificateAuthority.loadOrCreate(path.join(tmpDir, 'ca-serial.pem'), secrets);
+
+    // Re-reading the PEM is the check: forge normalises away any leading zero
+    // it wrote, so a serial that comes back SHORTER than the 16 bytes minted is
+    // exactly the non-minimal encoding OpenSSL rejects. The old generator
+    // produced one about half the time.
+    const seen = new Set<string>();
+    for (let i = 0; i < 64; i++) {
+      const pem = ca.leafPemFor(`h${i}.serial.test`).cert;
+      const sn = forge.pki.certificateFromPem(pem).serialNumber;
+      expect(sn, `leaf ${i}`).toMatch(/^[0-9a-f]{32}$/);
+      // No leading zero byte AT ALL. A leading zero is sometimes legitimate
+      // (it is what keeps a high-bit-set integer positive), but the generator
+      // avoids ever needing one, so seeing one here means it is back to
+      // prefixing - and prefixing is what produced the non-minimal encodings.
+      expect(
+        sn.startsWith('00'),
+        `leaf ${i} starts with a zero byte; the generator must emit 0x01..0x7f so ` +
+          `there is never a leading zero to strip`,
+      ).toBe(false);
+      expect(parseInt(sn.slice(0, 2), 16), `leaf ${i} is not positive`).toBeLessThan(0x80);
+      seen.add(sn);
+    }
+    expect(seen.size, 'serials must not repeat').toBe(64);
+
+    // The CA's own certificate goes through the same generator.
+    const caSn = forge.pki.certificateFromPem(ca.certificatePem).serialNumber;
+    expect(caSn).toMatch(/^[0-9a-f]{32}$/);
+    expect(caSn.startsWith('00')).toBe(false);
+  });
+
+  it('is rejected by OpenSSL when the serial is non-minimal — the actual failure', () => {
+    // Pinning the mechanism, so a future "tidy-up" of the generator that
+    // reintroduces a leading zero fails here with an explanation rather than
+    // intermittently in CI.
+    const keys = forge.pki.rsa.generateKeyPair(2048);
+    const attrs = [{ name: 'commonName', value: 'serial.test' }];
+    const keyPem = forge.pki.privateKeyToPem(keys.privateKey);
+
+    const certWith = (serialNumber: string): string => {
+      const cert = forge.pki.createCertificate();
+      cert.publicKey = keys.publicKey;
+      cert.serialNumber = serialNumber;
+      cert.validity.notBefore = new Date(Date.now() - 86_400_000);
+      cert.validity.notAfter = new Date(Date.now() + 86_400_000);
+      cert.setSubject(attrs);
+      cert.setIssuer(attrs);
+      cert.setExtensions([{ name: 'basicConstraints', cA: false }]);
+      cert.sign(keys.privateKey, forge.md.sha256.create());
+      return forge.pki.certificateToPem(cert);
+    };
+
+    // Two leading zero bytes: forge strips one, the other is redundant.
+    expect(() =>
+      tls.createSecureContext({ key: keyPem, cert: certWith('00000d8b2b83238bb48494136ac60b51') }),
+    ).toThrow(/illegal padding/);
+
+    // What the generator now produces: first byte 0x01..0x7f, nothing to strip.
+    expect(() =>
+      tls.createSecureContext({ key: keyPem, cert: certWith('3d27c23f6445ad3665430c653e1dee10') }),
+    ).not.toThrow();
+  }, 30_000);
 
   it('issues distinct certs per host but reuses the leaf key', async () => {
     const secrets = new InMemorySecretStore();

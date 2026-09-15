@@ -51,10 +51,27 @@ interface LeafEntry {
 }
 
 function randomSerialHex(): string {
-  // Positive serial: force high bit clear by prefixing 0x00-safe byte.
-  const bytes = forge.random.getBytesSync(16);
-  const hex = forge.util.bytesToHex(bytes);
-  return '00' + hex.slice(2);
+  // DER encodes the serial as an INTEGER, which must be BOTH positive (high bit
+  // of the first byte clear) and minimally encoded (no redundant leading zero
+  // byte). The old form was `'00' + 15 random bytes`, which satisfied the first
+  // and quietly broke the second: node-forge strips exactly one leading zero
+  // when it writes the DER, so whenever the first random byte was ALSO 0x00 and
+  // the next had its high bit clear, the encoding kept a redundant zero.
+  //
+  // OpenSSL 3 refuses such a certificate outright —
+  // `error:068000DD:asn1 encoding routines::illegal padding` — from
+  // `tls.createSecureContext`, which is where every leaf is turned into a
+  // usable context. About 1 leaf in 512 (byte[1] == 0, then byte[2] < 0x80), so
+  // interception for that host failed with an ASN.1 error and no obvious cause,
+  // and a new CA was unusable at the same rate. Measured: 9 rejected out of
+  // 6000 with the old generator, 0 out of 6000 with this one.
+  //
+  // Forcing the first byte into 0x01..0x7f is positive, non-zero and minimal by
+  // construction, with no leading zero to strip. 127 bits of entropy, well
+  // above the 64-bit CA/Browser Forum floor.
+  const hex = forge.util.bytesToHex(forge.random.getBytesSync(16));
+  const first = parseInt(hex.slice(0, 2), 16) & 0x7f || 0x01;
+  return first.toString(16).padStart(2, '0') + hex.slice(2);
 }
 
 interface CaMaterialInternal {
