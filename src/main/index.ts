@@ -62,6 +62,9 @@ function createWindow(): void {
     minHeight: 600,
     backgroundColor: '#0d1117',
     title: 'TACNOC',
+    // Windows and macOS take the window icon from the packaged executable or
+    // bundle; Linux and `electron-vite dev` need to be handed a file.
+    icon: path.join(__dirname, '../renderer/icon.png'),
     // Frameless: the app's own top bar IS the title bar, so the OS chrome is one
     // less strip of vertical space between the operator and the traffic table.
     //
