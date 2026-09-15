@@ -93,9 +93,23 @@ describe('zip writer and reader', () => {
     // Resolved for the same reason as in huntFolderLayout.test.ts: macOS tmpdir is a symlink.
     const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tacnoc-zip-')));
     try {
+      // ASCII names only for this one.
+      //
+      // Info-ZIP's `unzip` does not honour the UTF-8 name flag (bit 11)
+      // consistently: on Linux it writes `notes/résumé.md` under a different
+      // spelling, and on macOS it fails outright with a write error and then
+      // BLOCKS on an interactive "Continue? (y/n)" prompt. Neither says
+      // anything about our archive — the round-trip test above proves the name
+      // survives our own reader byte for byte, and `unzip -l` lists it fine.
+      // What this test exists to answer is whether a foreign extractor can open
+      // the archive at all, so it asks that question with names no extractor
+      // can disagree about.
+      const portable = entries.filter((e) => !/[^ -~]/.test(e.path));
+      expect(portable.length).toBeGreaterThan(2);
+
       const zipPath = path.join(dir, 'bundle.zip');
       const out = path.join(dir, 'out');
-      await fs.writeFile(zipPath, buildZip(entries));
+      await fs.writeFile(zipPath, buildZip(portable));
       if (process.platform === 'win32') {
         const r = spawnSync(
           'powershell',
@@ -105,38 +119,22 @@ describe('zip writer and reader', () => {
             '-Command',
             `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${out}' -Force`,
           ],
-          { encoding: 'utf8' },
+          { encoding: 'utf8', input: '' },
         );
         expect(r.status, r.stderr).toBe(0);
       } else {
-        const r = spawnSync('unzip', ['-o', '-q', zipPath, '-d', out], { encoding: 'utf8' });
+        // `input: ''` closes stdin, so a prompting extractor fails fast instead
+        // of hanging the suite until the test timeout.
+        const r = spawnSync('unzip', ['-o', '-q', zipPath, '-d', out], {
+          encoding: 'utf8',
+          input: '',
+        });
         if (r.error && (r.error as NodeJS.ErrnoException).code === 'ENOENT') return; // no unzip here
         expect(r.status, r.stderr).toBe(0);
       }
-      for (const e of entries) {
-        const rel = e.path.split('/');
-        const expected = bytesOf(e.data);
-        let got: Buffer | undefined;
-        try {
-          got = await fs.readFile(path.join(out, ...rel));
-        } catch {
-          // Info-ZIP's `unzip` does not reliably honour the UTF-8 name flag
-          // (bit 11), so a non-ASCII entry can land under a different spelling.
-          // The archive is correct either way - our own reader round-trips the
-          // name exactly, which the round-trip test asserts - so match this
-          // entry by content within its directory rather than by filename.
-          // What this test is for is whether a foreign extractor can open the
-          // archive at all, not how Info-ZIP transliterates names.
-          const dir = path.join(out, ...rel.slice(0, -1));
-          for (const name of await fs.readdir(dir)) {
-            const candidate = await fs.readFile(path.join(dir, name));
-            if (candidate.equals(expected)) {
-              got = candidate;
-              break;
-            }
-          }
-        }
-        expect(got !== undefined && got.equals(expected), e.path).toBe(true);
+      for (const e of portable) {
+        const got = await fs.readFile(path.join(out, ...e.path.split('/')));
+        expect(got.equals(bytesOf(e.data)), e.path).toBe(true);
       }
     } finally {
       await fs.rm(dir, { recursive: true, force: true });

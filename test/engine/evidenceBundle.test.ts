@@ -67,7 +67,10 @@ const detail = (s: ExchangeSummary): ExchangeDetail => ({
   tags: [],
   request: {
     method: s.method,
-    target: s.path,
+    // Origin-form, so it carries the query string — which is how a credential
+    // lands on the request line itself. The fixture used a bare path, which is
+    // why the leak survived the first version of these tests.
+    target: `${s.path}?access_token=tok_live_SHOULD_NOT_LEAK`,
     url: s.url,
     httpVersion: 'HTTP/1.1',
     headers: [
@@ -205,6 +208,14 @@ describe('evidence bundle', () => {
     expect(all).not.toContain('hunter2-DO-NOT-LEAK');
     expect(all).toContain('[REDACTED]');
     expect(built.summary.redacted).toBe(true);
+
+    // Specifically the request line, not just the `# url:` comment above it.
+    // The target is origin-form and carries the query, so this is where a
+    // credential lands in a bundle that claims to be redacted.
+    const files = readZip(built.zip);
+    const name = [...files.keys()].find((k) => k.startsWith('exchanges/'));
+    const exchange = text(files, name as string);
+    expect(exchange).toContain('GET /account?access_token=[REDACTED] HTTP/1.1');
   });
 
   it('includes raw captures only when asked, and says so everywhere it matters', async () => {

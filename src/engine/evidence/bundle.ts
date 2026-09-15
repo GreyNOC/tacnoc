@@ -116,7 +116,13 @@ function renderExchange(d: ExchangeDetail, redactor: Redactor, raw: boolean): st
   }
   L.push('');
   L.push('===== REQUEST =====');
-  L.push(`${d.request.method} ${d.request.target} ${d.request.httpVersion}`);
+  // The request target is origin-form, so it carries the query string: a
+  // capture of `/callback?code=...` puts the credential on the request line
+  // itself. Redacting only the `# url:` comment above left it in the clear in a
+  // bundle that says it is redacted. `redactUrl` is pure string work — it finds
+  // `?` and masks sensitive parameter values — so it applies to a bare target.
+  const target = raw ? d.request.target : redactor.redactUrl(d.request.target);
+  L.push(`${d.request.method} ${target} ${d.request.httpVersion}`);
   L.push(renderHeaders(d.request.headers, redactor, raw));
   L.push('');
   const reqBody = renderBody(d.request.bodyBase64, redactor, raw);

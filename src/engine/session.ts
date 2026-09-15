@@ -971,12 +971,28 @@ export class TacnocSession extends EventEmitter {
     const wanted = normalizeHost(host);
     if (!wanted) throw new Error('An evidence bundle needs a target host.');
 
-    const page = this.queryHistory({
-      host: wanted,
-      limit: Math.max(maxExchanges * 4, 2000),
-      sort: 'desc',
-    });
-    const exact = page.rows.filter((r) => normalizeHost(r.host) === wanted);
+    // `HistoryRepo.query` clamps every page to 2000 rows however large a limit
+    // it is handed, and the host filter is a SUBSTRING match. One query could
+    // therefore be filled entirely by impostor hosts, or stop short of a host
+    // with more than 2000 exchanges — under-counting `exchangesAvailable`,
+    // returning fewer than asked for, and silently dropping findings, since
+    // they are joined against these ids. Page until the matches run out.
+    const PAGE = 2000;
+    const SCAN_CAP = 100_000; // the bound the site map already uses
+    const exact: ExchangeSummary[] = [];
+    let offset = 0;
+    let total = Number.POSITIVE_INFINITY;
+    let scanned = 0;
+    while (offset < total && scanned < SCAN_CAP) {
+      const page = this.queryHistory({ host: wanted, limit: PAGE, offset, sort: 'desc' });
+      total = page.total;
+      if (page.rows.length === 0) break;
+      for (const row of page.rows) {
+        if (normalizeHost(row.host) === wanted) exact.push(row);
+      }
+      offset += page.rows.length;
+      scanned += page.rows.length;
+    }
     const exchanges = exact.slice(0, maxExchanges);
 
     // Findings carry an exchange id and no host, so the join runs through the
@@ -999,10 +1015,30 @@ export class TacnocSession extends EventEmitter {
     });
 
     const sites = this.getTargetMap().sites.filter((s) => normalizeHost(s.host) === wanted);
-    const first = sites[0];
-    const scheme: Scheme = first?.scheme ?? (exchanges[0]?.scheme === 'https' ? 'https' : 'http');
-    const port = first?.port ?? (scheme === 'https' ? 443 : 80);
-    const targetInScope = evaluateScope(this.getScope(), { scheme, host: wanted, port }).inScope;
+
+    // Scope is evaluated per origin AND per path. Asking about one pathless
+    // origin marked a target out of scope whenever its rule carried a path
+    // prefix — `/api` never matches the default `/` — and the handoff then
+    // refused a target whose captured endpoints were perfectly in scope. It
+    // also only ever consulted the first origin, so a host seen on two schemes
+    // or ports was judged on one of them. Ask the endpoints the site map has
+    // already evaluated, and fall back to both schemes when nothing has been
+    // captured for this host yet.
+    const scope = this.getScope();
+    const targetInScope = sites.length
+      ? sites.some(
+          (s) =>
+            s.endpoints.some((e) => e.inScope) ||
+            evaluateScope(scope, { scheme: s.scheme, host: wanted, port: s.port }).inScope,
+        )
+      : (['https', 'http'] as const).some(
+          (scheme) =>
+            evaluateScope(scope, {
+              scheme,
+              host: wanted,
+              port: scheme === 'https' ? 443 : 80,
+            }).inScope,
+        );
 
     return {
       host: wanted,
