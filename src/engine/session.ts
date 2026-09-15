@@ -312,6 +312,12 @@ export class TacnocSession extends EventEmitter {
     this.scanner = undefined;
     this.repeater = undefined;
     this.variation = undefined;
+    // The buffer is built once per Session and the Session outlives every
+    // project opened in it, so records from the last engagement sat in the tail
+    // waiting to be exported into the next one's diagnostics — up to 5000 of
+    // them, naming a different client's hosts. A tail describes the project it
+    // was recorded against; when that project closes, so does the tail.
+    this.logBuffer.clear();
   }
 
   /**
@@ -856,11 +862,21 @@ export class TacnocSession extends EventEmitter {
    * the enforced scope, the engagement folder, and the ranked attack surface are
    * all computed here, deterministically, from the project. Handing it over keeps
    * a declined turn from costing the whole run.
+   *
+   * `options.host` narrows it to one target, and an evidence bundle must pass
+   * it. Unnarrowed, this ranks every site in the project and names the
+   * engagement folder with up to twenty of its filenames — which is right for
+   * the live UI and the mesh, since neither leaves the machine, and wrong for a
+   * file a triager opens: a bundle that shipped one host's exchanges was
+   * handing over another client's endpoints, the folder path named after them,
+   * and the local CA's particulars alongside.
    */
-  async engineBriefing(): Promise<string> {
+  async engineBriefing(options: { host?: string } = {}): Promise<string> {
+    const scopedTo = options.host ? normalizeHost(options.host) : undefined;
     const lines: string[] = [
       'ENGINE BRIEFING — produced by TACNOC itself, from the open project. Every fact below is ' +
-        'read from the project, not inferred.',
+        'read from the project, not inferred.' +
+        (scopedTo ? ` Narrowed to ${scopedTo}; the project may hold other targets.` : ''),
       '',
     ];
 
@@ -885,29 +901,41 @@ export class TacnocSession extends EventEmitter {
       blockers = report.checks.filter((c) => c.severity === 'blocker').map((c) => c.title);
       lines.push(`## Readiness: ${report.ready ? 'ready' : 'NOT ready — blockers below'}`);
       for (const c of report.checks) {
-        lines.push(`- [${c.severity}] ${c.title}${c.detail ? ` — ${c.detail}` : ''}`);
+        // Narrowed, the titles travel and the details stay behind: a check's
+        // detail is where this machine's particulars live — the CA subject and
+        // its fingerprint, local paths — and a triager needs to know what was
+        // not ready, not what the operator's installation looks like.
+        const detail = c.detail && !scopedTo ? ` — ${c.detail}` : '';
+        lines.push(`- [${c.severity}] ${c.title}${detail}`);
       }
       lines.push('');
     } catch {
       /* readiness is best-effort here */
     }
 
-    try {
-      const listing = await this.listWorkspace();
-      lines.push(`## Engagement folder: ${listing.root}`);
-      lines.push(
-        listing.fileCount
-          ? `${listing.fileCount} document(s): ${listing.notableFiles.slice(0, 20).join(', ')}`
-          : 'No readable documents. Read them with the workspace tools if this is wrong.',
-      );
-      lines.push('');
-    } catch {
-      /* folder is best-effort here */
+    // The engagement folder is the operator's, and its filenames routinely name
+    // the client. Omit it entirely rather than trying to decide which of them
+    // are safe to name.
+    if (!scopedTo) {
+      try {
+        const listing = await this.listWorkspace();
+        lines.push(`## Engagement folder: ${listing.root}`);
+        lines.push(
+          listing.fileCount
+            ? `${listing.fileCount} document(s): ${listing.notableFiles.slice(0, 20).join(', ')}`
+            : 'No readable documents. Read them with the workspace tools if this is wrong.',
+        );
+        lines.push('');
+      } catch {
+        /* folder is best-effort here */
+      }
     }
 
     try {
-      const ranking = this.rankAttackSurface(20);
-      lines.push('## Ranked attack surface (in-scope endpoints, best first)');
+      const ranking = this.rankAttackSurface(20, scopedTo);
+      lines.push(
+        `## Ranked attack surface (in-scope endpoints${scopedTo ? ` on ${scopedTo}` : ''}, best first)`,
+      );
       lines.push(
         ranking.leads.length
           ? ranking.leads
@@ -1084,8 +1112,8 @@ export class TacnocSession extends EventEmitter {
         detail: (id) => this.getExchangeDetail(id),
         findings: collected.findings,
         audit: collected.audit,
-        engineBriefing: () => this.engineBriefing(),
-        logs: options.includeLogs === false ? null : this.logsForBundle(),
+        engineBriefing: (scopedHost) => this.engineBriefing({ host: scopedHost }),
+        logs: options.includeLogs === true ? this.logsForBundle() : null,
         redactor: this.aiRedactor,
         targetInScope: collected.targetInScope,
         now: Date.now(),
@@ -1261,9 +1289,18 @@ export class TacnocSession extends EventEmitter {
   /**
    * Rank in-scope endpoints by which defect class each most likely hides.
    * Deterministic and offline — it reorders attention and cannot add a target.
+   *
+   * `host` narrows the ranking to one site, which is what an evidence bundle
+   * needs: unnarrowed it walks every site the project has captured.
    */
-  rankAttackSurface(limit = 25): SurfaceRanking {
-    return rankAttackSurface(this.getTargetMap(), limit);
+  rankAttackSurface(limit = 25, host?: string): SurfaceRanking {
+    const map = this.getTargetMap();
+    if (!host) return rankAttackSurface(map, limit);
+    const wanted = normalizeHost(host);
+    return rankAttackSurface(
+      { ...map, sites: map.sites.filter((s) => normalizeHost(s.host) === wanted) },
+      limit,
+    );
   }
 
   /**

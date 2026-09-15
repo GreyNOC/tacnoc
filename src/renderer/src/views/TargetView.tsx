@@ -19,6 +19,10 @@ export function TargetView(): JSX.Element {
   const lastLoadedAt = useRef(0);
 
   const [rawCaptures, setRawCaptures] = useState(false);
+  // The log tail is session-wide, so it names every host the proxy has touched,
+  // not just the one being exported. Same posture as raw captures: off unless
+  // the operator says otherwise.
+  const [sessionLogs, setSessionLogs] = useState(false);
   const [busy, setBusy] = useState<'export' | 'mesh'>();
 
   const say = (message: string): void => store.setToast(message);
@@ -31,6 +35,7 @@ export function TargetView(): JSX.Element {
     try {
       const res = await api.exportTargetEvidence(selectedSite.host, {
         includeRawCaptures: rawCaptures,
+        includeLogs: sessionLogs,
       });
       // `null` means the save dialog was cancelled. That is not a failure and
       // must not be reported as one.
@@ -154,6 +159,17 @@ export function TargetView(): JSX.Element {
             onChange={(event) => setRawCaptures(event.target.checked)}
           />
           raw captures
+        </label>
+        <label
+          className="hint"
+          title="The log tail covers the whole session, not this target — it names every host the proxy has touched since the app started."
+        >
+          <input
+            type="checkbox"
+            checked={sessionLogs}
+            onChange={(event) => setSessionLogs(event.target.checked)}
+          />
+          session logs
         </label>
         <button
           disabled={!selectedSite || busy !== undefined}

@@ -241,8 +241,16 @@ function isHeaderArray(v: unknown): v is HttpHeader[] {
 
 const MAX_DECOMPRESSED = 8 * 1024 * 1024; // guard against decompression bombs
 
-/** Best-effort decompress a captured body by Content-Encoding; null if it cannot. */
-function tryDecompress(raw: Buffer, encoding?: string): Buffer | null {
+/**
+ * Best-effort decompress a captured body by Content-Encoding; null if it cannot.
+ *
+ * Exported because the evidence bundle needs exactly this and used to have
+ * nothing: it UTF-8-decoded the stored bytes, which for a gzip or br response —
+ * nearly every HTTPS response there is — destroyed the body it was shipping as
+ * evidence. A second decompressor would be a second place to forget
+ * `maxOutputLength`, so there is one, and it is this.
+ */
+export function tryDecompress(raw: Buffer, encoding?: string): Buffer | null {
   if (!encoding) return null;
   const e = encoding.trim().toLowerCase();
   const opts = { maxOutputLength: MAX_DECOMPRESSED };
