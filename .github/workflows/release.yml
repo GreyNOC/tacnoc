@@ -15,6 +15,13 @@ permissions:
 jobs:
   build:
     strategy:
+      # One runner failing must not cancel the others. Twice now a single leg
+      # has taken the whole matrix down mid-build — v0.5.3 (macOS quality gate)
+      # and v0.5.4 (macOS packaging) — and in both cases the Windows and Linux
+      # legs were producing artifacts when they were cancelled. draft-release
+      # still needs every leg, so a failure blocks the release either way; what
+      # this buys is knowing whether the other two are healthy.
+      fail-fast: false
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
@@ -33,15 +40,40 @@ jobs:
         # Code signing activates automatically ONLY when the corresponding
         # secrets are configured; otherwise electron-builder produces UNSIGNED
         # artifacts (it does not fail). See RELEASE.md.
-        run: npm run dist
+        #
+        # The signing variables are exported per-OS, in the shell, rather than
+        # in `env:` — because a GitHub expression that evaluates to nothing sets
+        # the variable to the EMPTY STRING, and an empty CSC_LINK is not the
+        # same as an unset one. electron-builder reads CSC_LINK as a path to a
+        # certificate: given "", it resolves against the working directory and
+        # fails with "<projectDir> not a file". That is exactly what killed the
+        # v0.5.4 macOS leg — a *Windows* Authenticode variable was being handed
+        # to all three runners, and macOS is where it is fatal.
+        shell: bash
         env:
           # Windows Authenticode (set both to enable):
-          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+          WINDOWS_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          WINDOWS_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
           # macOS Developer ID + notarization (set all to enable):
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ] && [ -n "$WINDOWS_CSC_LINK" ]; then
+            export CSC_LINK="$WINDOWS_CSC_LINK"
+            export CSC_KEY_PASSWORD="$WINDOWS_CSC_KEY_PASSWORD"
+            echo "Windows Authenticode certificate configured."
+          fi
+          if [ "$RUNNER_OS" = "macOS" ] && [ -z "$APPLE_ID" ]; then
+            # No Developer ID to find. Say so, rather than letting auto-discovery
+            # search the keychain and leave the build unsigned as a side effect.
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            echo "No Apple ID configured — macOS identity auto-discovery disabled."
+          fi
+          # `--publish never`: the draft-release job below publishes. Left
+          # implicit, electron-builder publishes on a v* tag by itself (it warns
+          # about exactly this) and would race that job for the same release.
+          npm run dist -- --publish never
       - name: Install E2E system deps (Linux)
         if: matrix.os == 'ubuntu-latest'
         # Electron (launched by Playwright) needs the same system libraries as the
