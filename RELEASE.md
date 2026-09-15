@@ -195,11 +195,42 @@ resolved by Node's `fs.realpath`, so the string split that fails on macOS cannot
 be manufactured on this host. The fix is verified by the `macos-latest` leg of
 the release run below — the only place the defect ever showed.
 
-Artifacts are built by `release.yml` on the tag, on all three runners, with
-`packaged.spec.ts` run against each packaged binary before `draft-release`. They
-are UNSIGNED — no signing secrets are configured, the same operator decision as
-every cut before — and the release is a draft. The run, the artifacts, and their
-SHA-256 manifests are recorded here once it completes.
+**This release produced no artifacts.** The tagged `release.yml` run
+(`35010044815`) failed. The macOS fix worked — the quality gate passed on
+`macos-latest` for the first time, which is precisely what had failed on v0.5.3
+— and the leg then failed one step later, at packaging, on a defect in the
+workflow that no cut had ever reached:
+
+```
+• empty password will be used for code signing  reason=CSC_KEY_PASSWORD is not defined
+⨯ /Users/runner/work/tacnoc/tacnoc not a file
+```
+
+`CSC_LINK` (Windows Authenticode) was set from a matrix-wide `env:` block on all
+three runners. An unset GitHub secret substitutes the **empty string**, not
+nothing, and electron-builder takes `CSC_LINK` as a path to a certificate:
+`""` resolved against the working directory is the project root, which is not a
+file. `fail-fast` then cancelled Windows and Linux — Linux was mid-build with
+`TACNOC-0.5.4-linux-x86_64.AppImage` and `TACNOC-0.5.4-linux-x64.tar.gz` already
+building, so nothing here indicates a problem on either. Fixed in v0.5.5; the
+`v0.5.4` tag stays where it is, and marks a second version with no artifacts.
+
+### v0.5.5 — cut UNSIGNED, built by CI (operator decision, 2026-09-15)
+
+`v0.5.5` is v0.5.4 plus the `release.yml` fixes that let the matrix package: the
+signing variables are exported per-OS in the shell rather than in `env:` (so an
+empty one is never seen by a runner that has no such secret), macOS identity
+auto-discovery is disabled explicitly when no Apple ID is configured, the build
+passes `--publish never` so electron-builder stops racing `draft-release` for
+the same release, and `fail-fast` is off so one leg cannot cancel the others.
+No application code changed.
+
+Gate on this workstation: `npm run ci` green, `npm run test:e2e` 10/10 in the
+real Electron runtime, full-tree `npm audit` 0 at every level, SBOM regenerated.
+The macOS packaging path cannot be exercised here at all — this is a Windows
+host — so, as with the v0.5.4 test fix, the `macos-latest` leg of the release
+run is the verification. The run, the artifacts, and their SHA-256 manifests are
+recorded below once it completes.
 
 ### v0.5.3 — cut UNSIGNED (operator decision, 2026-09-03)
 

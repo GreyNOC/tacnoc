@@ -8,6 +8,40 @@ All notable changes to TACNOC are documented here. The format follows
 
 _Nothing yet._
 
+## [0.5.5] — 2026-09-15
+
+### Fixed — the release workflow could not sign, so it could not build
+
+v0.5.4 fixed the macOS *quality gate* and the macOS leg went straight on to fail
+at **packaging** — a step no cut had ever reached, because the gate had always
+died first. Two defects in `release.yml`, both invisible until something got
+that far:
+
+- **A Windows Authenticode variable was handed to every runner.** `CSC_LINK` was
+  set from `secrets.WINDOWS_CSC_LINK` in a matrix-wide `env:` block. A GitHub
+  expression that evaluates to nothing sets the variable to the **empty string**,
+  and an empty `CSC_LINK` is not the same as an unset one: electron-builder reads
+  it as a path to a certificate, resolves `""` against the working directory, and
+  stops with `⨯ <projectDir> not a file`. Windows tolerated it and macOS did not.
+  The signing variables are now exported per-OS in the shell, so a runner sees a
+  signing variable only when that platform's secret is actually configured, and
+  macOS disables identity auto-discovery explicitly when no Apple ID is set —
+  unsigned by decision rather than by failed search.
+- **electron-builder was publishing on its own.** It warned on every tagged run
+  (`Implicit publishing triggered by git tag`) that it would upload to the
+  release itself, racing the `draft-release` job for the same release. The build
+  now passes `--publish never`; drafting stays the one job that does it.
+
+### Changed
+
+- **`fail-fast` is off for the release matrix.** One runner failing no longer
+  cancels the others. It happened twice — v0.5.3 (macOS gate) and v0.5.4 (macOS
+  packaging) — and both times Windows and Linux were mid-build and producing
+  artifacts when they were cancelled, so neither failure said anything about
+  whether those platforms were healthy. `draft-release` still requires every
+  leg, so a failure blocks the release exactly as before; what changes is that
+  the run now reports on all three.
+
 ## [0.5.4] — 2026-09-15
 
 ### Fixed — the v0.5.3 release never built
