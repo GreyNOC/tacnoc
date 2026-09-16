@@ -415,6 +415,22 @@ describe('evidence bundle bodies', () => {
     expect(exchangeFile(readZip(built.zip)).includes(bytes)).toBe(true);
   });
 
+  it('keeps a compressed body compressed on the raw path, so the headers still describe it', async () => {
+    const payload = 'RAW-MARKER-9f2c gzip body that must not be decompressed here';
+    const gz = zlib.gzipSync(Buffer.from(payload, 'utf8'));
+    const built = await buildEvidenceBundle(source(withResponseBody(gz, 'gzip')), {
+      includeRawCaptures: true,
+    });
+    const file = exchangeFile(readZip(built.zip));
+
+    // `Content-Encoding: gzip` and `Content-Length` are written verbatim above
+    // the body. Decompressing would leave both describing bytes that are not
+    // there, and a "RAW as captured" bundle that is not what was captured.
+    expect(file.includes(gz)).toBe(true);
+    expect(file.toString('latin1')).not.toContain(payload);
+    expect(file.toString('utf8')).toContain('left gzip-compressed, as captured');
+  });
+
   it('caps a raw body at the same size the redacted one is capped at', async () => {
     const built = await buildEvidenceBundle(
       source(withResponseBody(Buffer.alloc(600 * 1024, 0x41))),

@@ -893,6 +893,7 @@ small.hint {
    scrolling room to clear it rather than hiding the last item behind it. */
 .app.tour-open .setup-scroll,
 .app.tour-open .table-wrap,
+.app.tour-open .scrolly,
 .app.tour-open .sidebar {
   padding-bottom: 160px;
 }

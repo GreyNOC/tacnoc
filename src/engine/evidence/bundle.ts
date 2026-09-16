@@ -140,14 +140,17 @@ function renderBody(msg: MessageDetail, redactor: Redactor, raw: boolean): Rende
   let note: string | undefined;
 
   if (encoding && encoding.toLowerCase() !== 'identity') {
-    const plain = tryDecompress(stored, encoding);
-    if (plain) {
+    // A raw bundle promises the bytes the wire carried, and the header block
+    // above it is emitted verbatim. Decompressing here would leave
+    // `Content-Encoding: gzip` and a `Content-Length` sitting over bytes that
+    // are neither — the reader can decompress it themselves, and only from the
+    // original can they check it against the capture.
+    const plain = raw ? null : tryDecompress(stored, encoding);
+    if (raw) {
+      note = `left ${encoding}-compressed, as captured`;
+    } else if (plain) {
       bytes = plain;
       note = `decompressed from ${encoding}`;
-    } else if (raw) {
-      // A raw bundle promises the captured bytes, and compressed-as-captured
-      // still keeps that promise — the reader can decompress it themselves.
-      note = `left ${encoding}-compressed; it could not be decompressed here`;
     } else {
       return {
         bytes: Buffer.from(
