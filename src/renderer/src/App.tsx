@@ -19,8 +19,14 @@ import { AiMeshView } from './views/AiMeshView.js';
 import { EngagementView } from './views/EngagementView.js';
 import { api } from './api.js';
 import { OwlMark } from './components/OwlMark.js';
+import { SetupView } from './views/SetupView.js';
+import { Tour } from './guide/Tour.js';
 
 const NAV: { group: string; items: { id: ViewId; label: string }[] }[] = [
+  {
+    group: 'Start here',
+    items: [{ id: 'setup', label: 'Setup' }],
+  },
   {
     group: 'Traffic',
     items: [
@@ -246,6 +252,8 @@ function Sidebar(): JSX.Element {
 function ActiveView(): JSX.Element {
   const { view } = useStore();
   switch (view) {
+    case 'setup':
+      return <SetupView />;
     case 'target':
       return <TargetView />;
     case 'history':
@@ -316,7 +324,10 @@ export function App(): JSX.Element {
     );
   }
   return (
-    <div className="app">
+    // `tour-open` reserves room at the bottom of the scroll area: the
+    // walkthrough is docked rather than modal, and without this it sits on top
+    // of the last item of a long view with no way to scroll past it.
+    <div className={`app ${s.tourActive ? 'tour-open' : ''}`}>
       <TopBar />
       <div className="body">
         <Sidebar />
@@ -324,6 +335,7 @@ export function App(): JSX.Element {
           <ActiveView />
         </main>
       </div>
+      <Tour />
       <Toast />
     </div>
   );

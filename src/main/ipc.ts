@@ -21,6 +21,8 @@ import {
 // verbatim copy of the engine's per-platform text, so the two could (and did)
 // drift while both looked authoritative.
 import { caInstallGuide, caInstallInstructions } from '../engine/ca/installInstructions.js';
+import { readUiPreferences, writeUiPreferences } from './uiPrefs.js';
+import { parseUiPreferences } from '../shared/guide.js';
 import { inspectJwt } from '../engine/transforms/codec.js';
 import { diffLines, diffJson, diffBytes } from '../engine/compare/compare.js';
 import { analyzeTokenSamples } from '../engine/analysis/sequencer.js';
@@ -278,6 +280,14 @@ const handlers: Record<string, Handler> = {
   getConfig: (s) => s.getConfig(),
   setConfig: (s, _w, [c]) => s.setConfig(c as never),
 
+  // Guided setup. `parseUiPreferences` runs on the way in as well as the way
+  // out: this crosses the bridge from the renderer, so it is untrusted input,
+  // not merely a value that might be stale.
+  getUiPrefs: () => readUiPreferences(),
+  setUiPrefs: (_s, _w, [prefs]) => {
+    writeUiPreferences(parseUiPreferences(prefs));
+  },
+
   getInterceptState: (s) => s.getInterceptState(),
   setInterceptState: (s, _w, [p]) => s.setInterceptState(p as never),
   listPendingRequests: (s) => s.listPendingRequests(),
@@ -407,7 +417,11 @@ function assertHandlerParity(): void {
 export function registerIpc(session: TacnocSession, getWindow: () => BrowserWindow | null): void {
   assertHandlerParity();
   ipcMain.handle(IPC_INVOKE, async (_event, method: string, args: unknown[]) => {
-    const handler = handlers[method];
+    // `Object.hasOwn`, not a truthiness check: `handlers` is an object
+    // literal, so 'constructor' and 'toString' would otherwise resolve
+    // through the prototype and reach a dispatch they are not on the
+    // allowlist for.
+    const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined;
     if (!handler) throw new Error(`unknown method: ${method}`);
     try {
       return await handler(session, getWindow, args ?? []);

@@ -14,6 +14,7 @@ import type { ExchangeDetail } from '@shared/detail.js';
 import type { WsMessage } from '@shared/websocket.js';
 import type { ScopeConfig } from '@shared/scope.js';
 import type { EngineConfig } from '@shared/config.js';
+import type { UiPreferences } from '@shared/guide.js';
 import type { Finding, SuppressionRule } from '@shared/findings.js';
 import type { ProjectInfo, SavedRequest } from '@shared/project.js';
 import type {
@@ -129,6 +130,10 @@ export const api = {
   setScope: (scope: ScopeConfig) => b().invoke<void>('setScope', scope),
   getConfig: () => b().invoke<EngineConfig>('getConfig'),
   setConfig: (config: EngineConfig) => b().invoke<void>('setConfig', config),
+
+  // guided setup (per-install, not per-project)
+  getUiPrefs: () => b().invoke<UiPreferences>('getUiPrefs'),
+  setUiPrefs: (prefs: UiPreferences) => b().invoke<void>('setUiPrefs', prefs),
 
   // intercept
   getInterceptState: () => b().invoke<InterceptState>('getInterceptState'),
