@@ -6,6 +6,10 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.6.0] — 2026-09-15
+
 ### Added — guided setup: intake, a readiness checklist, and a skippable walkthrough
 
 Opening TACNOC for the first time used to drop you on an empty HTTP History

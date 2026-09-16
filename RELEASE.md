@@ -323,6 +323,48 @@ this bug had been in every release since the CA existed, it is invisible on
 Windows and Linux most of the time, and it took a macOS runner drawing an
 unlucky 16 bytes to expose it.
 
+### v0.6.0 — cut UNSIGNED, built by CI (operator decision, 2026-09-15)
+
+A minor bump rather than a patch: `v0.6.0` adds a user-facing feature, the
+guided setup, alongside two evidence-bundle fixes that are the reason v0.5.8 was
+never tagged.
+
+**What the bundle fixes change for anyone who already exported one.** Response
+bodies were UTF-8-decoded while still `Content-Encoding`-compressed, so in
+practice every gzip or br response in a bundle was unrecoverable — under a
+header that said `REDACTED (credentials and secret patterns masked)`, a claim
+nothing could have verified because the redactor could not read the bytes
+either. And a bundle for one target carried the whole project: the engine
+briefing embedded in `HANDOFF.md` ranked every in-scope host, named the
+engagement folder's absolute path and its filenames, and the session log tail
+shipped by default. Both are fixed; the log tail is now opt-in beside raw
+captures. **Re-export any bundle produced before this version, and treat one
+already handed to a third party as having disclosed the other hosts in scope.**
+
+`engagement.json` still carries the full `ScopeConfig` by design — the recipient
+needs to know what the gate permits — so a bundle still names the other in-scope
+hosts there. That is documented rather than fixed, and is an open decision.
+
+**Guided setup** replaces landing a new project on an empty history table:
+intake collects the program, platform and handle; a Setup view renders the same
+`getPreflight()` the mesh gates on, worst-first and wired to what clears each
+item; and a skippable walkthrough covers all seventeen features. The skip is
+per-install and survives a restart.
+
+Two defects were found by adversarial review AFTER the feature passed its own
+tests, and both are worth recording because the tests were green for them. The
+checklist's top blocker — "the proxy is bound to a non-loopback address" — was
+given a button labelled "Start the proxy", which is a no-op, because prefix
+routing matched `proxy-bind` to the wrong destination and the drift guard only
+asserted that *a* route existed. And a failed preferences write was swallowed,
+so on a read-only `userData` the walkthrough's skip reported success and came
+back on the next launch. Both fixed, both now driven in the running app.
+
+Gate on this workstation: `npm run ci` green (32 files / 427 tests),
+`npm run test:e2e` 13/13 in the real Electron runtime, full-tree `npm audit` 0 at
+every level, SBOM regenerated. The run, the artifacts and their SHA-256
+manifests are recorded below once it completes.
+
 ### v0.5.8 — cut UNSIGNED, built by CI (operator decision, 2026-09-15)
 
 `v0.5.8` fixes the certificate serial-number encoding. See `CHANGELOG.md`; the
