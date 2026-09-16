@@ -3,9 +3,11 @@
  *
  * The walkthrough is the operator's, not the engagement's: having skipped it
  * once, they should not meet it again on the next project. That puts this
- * outside the project database, in `userData`, which is also why it must not be
- * able to fail loudly — nothing here is worth failing a launch over. Reads fall
- * back to defaults; writes report failure to the caller without throwing.
+ * outside the project database, in `userData`. Reads must not be able to fail a
+ * launch, so they fall back to defaults. Writes are the opposite: a write that
+ * fails silently tells the operator their skip was saved when it was not, and
+ * the walkthrough comes back on the next launch having promised it would not.
+ * `writeUiPreferences` throws, and the IPC handler lets it through.
  *
  * All parsing and repair lives in `@shared/guide.js`, where it is pure and
  * covered by tests; this file is only the file IO.
@@ -48,11 +50,17 @@ export function writeUiPreferences(prefs: UiPreferences): void {
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(tmp, JSON.stringify(parseUiPreferences(prefs), null, 2), 'utf8');
     renameSync(tmp, file);
-  } catch {
+  } catch (err) {
     try {
       if (existsSync(tmp)) unlinkSync(tmp);
     } catch {
       /* the temp file is not worth a second failure */
     }
+    // A read-only userData (roaming profile, AV lock, `attrib +R`) is the case
+    // that matters: everything else keeps working, so nothing else would tell
+    // the operator their preference never reached disk.
+    throw new Error(
+      `Could not save UI preferences to ${file}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }

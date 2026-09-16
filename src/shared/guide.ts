@@ -60,7 +60,10 @@ export function parseUiPreferences(raw: unknown): UiPreferences {
     prefs.tour.step = Math.max(0, Math.trunc(tour.step));
   }
   if (isFiniteNumber(tour.version)) {
-    prefs.tour.version = Math.max(0, Math.trunc(tour.version));
+    // Clamped at both ends. A file claiming a version from the future would
+    // otherwise make `shouldOfferTour` false forever, silently suppressing the
+    // walkthrough for good.
+    prefs.tour.version = Math.min(Math.max(0, Math.trunc(tour.version)), TOUR_VERSION);
   }
   return prefs;
 }
@@ -79,9 +82,17 @@ export function shouldOfferTour(prefs: UiPreferences, version = TOUR_VERSION): b
 }
 
 /** Where a resumed tour picks up, clamped to the steps that actually exist. */
-export function resumeStep(prefs: UiPreferences, stepCount: number): number {
+export function resumeStep(
+  prefs: UiPreferences,
+  stepCount: number,
+  version = TOUR_VERSION,
+): number {
   if (stepCount <= 0) return 0;
   if (prefs.tour.status !== 'in-progress') return 0;
+  // An index recorded against older content points at a different step now:
+  // inserting two steps near the front turned "resume on the egress warning"
+  // into "resume on Compare". A valid index is not the same as the right one.
+  if (prefs.tour.version < version) return 0;
   return Math.min(Math.max(0, prefs.tour.step), stepCount - 1);
 }
 
@@ -117,18 +128,43 @@ export function restartTour(): TourState {
  * exactly the kind of wiring rot a checklist invites.
  */
 export type SetupDestination =
-  'engagement' | 'scope' | 'certificate' | 'history' | 'proxy' | 'none';
+  'engagement' | 'scope' | 'certificate' | 'history' | 'settings' | 'proxy' | 'none';
+
+/**
+ * Every preflight check id, and where the operator has to go to clear it.
+ *
+ * An explicit table rather than prefix matching, which was a rubber stamp: a
+ * route keyed on `id.startsWith('proxy')` sent `proxy-bind` — "the proxy is
+ * bound to a non-loopback address" — to a button labelled "Start the proxy",
+ * which no-ops, because that check can only fire while the proxy is ALREADY
+ * running. The drift guard passed it happily. Listing ids one by one means a
+ * new check has to be considered rather than absorbed by a prefix.
+ *
+ * `'none'` is a deliberate answer, not a fallback: it means there is no button
+ * worth offering. `history` says "browse the target through the proxy" — there
+ * is no control in this app that does that.
+ */
+export const CHECK_DESTINATIONS: Readonly<Record<string, SetupDestination>> = {
+  project: 'none',
+  authorization: 'engagement',
+  scope: 'scope',
+  'user-agent': 'engagement',
+  workspace: 'engagement',
+  history: 'none',
+  ca: 'certificate',
+  'ca-revoked': 'certificate',
+  'ca-expired': 'certificate',
+  'ca-expiring': 'certificate',
+  'ca-key-storage': 'certificate',
+  'ca-trust': 'certificate',
+  // Not running: the checklist can start it.
+  proxy: 'proxy',
+  // Bound somewhere it should not be: only the listener config fixes that.
+  'proxy-bind': 'settings',
+};
 
 export function destinationForCheck(id: string): SetupDestination {
-  if (id === 'scope') return 'scope';
-  if (id === 'history') return 'history';
-  if (id === 'project') return 'none';
-  if (id.startsWith('ca')) return 'certificate';
-  if (id.startsWith('proxy')) return 'proxy';
-  // authorization, user-agent and workspace are all fields of the engagement
-  // profile, which is one form.
-  if (id === 'authorization' || id === 'user-agent' || id === 'workspace') return 'engagement';
-  return 'none';
+  return CHECK_DESTINATIONS[id] ?? 'none';
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

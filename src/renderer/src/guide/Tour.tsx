@@ -3,8 +3,13 @@
  *
  * Deliberately NOT a modal: it is docked to the bottom and never covers the view
  * it is describing, so the operator reads each step with the actual feature in
- * front of them and can keep clicking around. Skip is present on every step, and
- * Escape does the same thing — a walkthrough you cannot leave is a dialog box.
+ * front of them and can keep clicking around. Skip is present on every step.
+ *
+ * Escape is "not now", NOT "never". Because the panel is docked precisely so the
+ * operator keeps working, Escape-while-typing is reachable — and Escape to cancel
+ * a text field is a reflex — so binding it to a permanent skip spent that choice
+ * on a keypress nobody meant as one. It now dismisses for the session, leaving
+ * the tour resumable, and is ignored entirely while focus is in a field.
  */
 
 import React, { useEffect, useRef } from 'react';
@@ -21,10 +26,18 @@ export function Tour(): JSX.Element | null {
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        s.skipTour();
-      }
+      if (e.key !== 'Escape') return;
+      const el = document.activeElement;
+      const typing =
+        el instanceof HTMLElement &&
+        (el.isContentEditable ||
+          el instanceof HTMLInputElement ||
+          el instanceof HTMLTextAreaElement ||
+          el instanceof HTMLSelectElement);
+      // The panel is the one exception: Escape with it focused is unambiguous.
+      if (typing && el !== panel.current) return;
+      e.preventDefault();
+      s.dismissTour();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -52,10 +65,12 @@ export function Tour(): JSX.Element | null {
       tabIndex={-1}
       ref={panel}
     >
+      {/* The panel persists while its contents are swapped, so without a live
+          region a screen reader hears nothing after the first step. */}
       <div className="tour-mark">
         <OwlMark />
       </div>
-      <div className="tour-text">
+      <div className="tour-text" aria-live="polite">
         <div className="tour-meta">
           Walkthrough · step {index + 1} of {TOUR_STEPS.length}
         </div>
@@ -65,7 +80,7 @@ export function Tour(): JSX.Element | null {
         </p>
       </div>
       <div className="tour-actions">
-        <button className="ghost" onClick={s.skipTour} title="Escape also skips">
+        <button className="ghost" onClick={s.skipTour} title="Never show this again">
           Skip tour
         </button>
         <button onClick={() => s.stepTour(-1)} disabled={first}>

@@ -891,8 +891,8 @@ small.hint {
 
 /* The docked walkthrough overlays the scroll area, so give whatever is
    scrolling room to clear it rather than hiding the last item behind it. */
-.app.tour-open .main,
 .app.tour-open .setup-scroll,
-.app.tour-open .table-wrap {
-  padding-bottom: 180px;
+.app.tour-open .table-wrap,
+.app.tour-open .sidebar {
+  padding-bottom: 160px;
 }

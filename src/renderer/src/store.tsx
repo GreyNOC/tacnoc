@@ -17,6 +17,7 @@ import type {
 import type { JobProgress } from '@shared/variation.js';
 import type { ProjectInfo } from '@shared/project.js';
 import {
+  TOUR_VERSION,
   advanceTour,
   defaultUiPreferences,
   resumeStep,
@@ -63,6 +64,7 @@ interface StoreValue {
   findingsCount: number;
   jobs: JobProgress[];
   exchangeTick: number;
+  engagementTick: number;
   view: ViewId;
   theme: 'dark' | 'light';
   toast?: string;
@@ -85,6 +87,7 @@ interface StoreValue {
   emergencyStop: () => void;
   startTour: () => void;
   skipTour: () => void;
+  dismissTour: () => void;
   stepTour: (delta: number) => void;
 }
 
@@ -108,6 +111,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }): JSX.
   const [findingsCount, setFindingsCount] = useState(0);
   const [jobs, setJobs] = useState<JobProgress[]>([]);
   const [exchangeTick, setExchangeTick] = useState(0);
+  /**
+   * Bumped by the events preflight reads but nothing else in the store tracked:
+   * scope, CA and engagement changes. Without it the Setup checklist sat on a
+   * stale verdict whenever something moved while it was on screen — the mesh
+   * applying a proposed scope, or an extension — which is exactly the engine-vs-
+   * checklist disagreement it exists to avoid.
+   */
+  const [engagementTick, setEngagementTick] = useState(0);
   // A fresh window lands on Setup: until scope and a CA exist the history
   // table is necessarily empty, which reads as 'broken' rather than 'not set up yet'.
   const [view, setView] = useState<ViewId>('setup');
@@ -117,7 +128,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }): JSX.
   const [prefs, setPrefs] = useState<UiPreferences>(defaultUiPreferences());
   const [tourActive, setTourActive] = useState(false);
   const [tourStep, setTourStep] = useState(0);
-  /** The tour is offered once per project-open at most, never re-armed mid-session. */
+  /** Offered at most once per session, not once per project-open. */
   const [tourOffered, setTourOffered] = useState(false);
   /**
    * Preferences arrive over IPC, so they can land AFTER a project opens.
@@ -145,11 +156,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }): JSX.
   }, []);
 
   /** Persist and keep the in-memory copy in step; failures are not worth a toast. */
+  /**
+   * Persist, and say so when it does not work.
+   *
+   * Settings promises the walkthrough "will not come back on its own once you
+   * have skipped" — a read-only userData made that a lie in silence: the skip
+   * held for the session and the tour returned on the next launch.
+   */
   const persistTour = useCallback((tour: TourState) => {
-    setPrefs((p) => {
-      const next: UiPreferences = { ...p, tour };
-      void api.setUiPrefs(next).catch(() => undefined);
-      return next;
+    setPrefs((p) => ({ ...p, tour }));
+    void api.setUiPrefs({ tour }).catch((e: unknown) => {
+      setToast(
+        `Could not save your walkthrough preference — it will not survive a restart. ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
     });
   }, []);
 
@@ -181,6 +202,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }): JSX.
 
   const skipTour = useCallback(() => {
     persistTour(skippedTourState());
+    setTourActive(false);
+    setView(tourReturnView.current);
+  }, [persistTour]);
+
+  /**
+   * "Not now", as distinct from "never" — what Escape does.
+   *
+   * Leaves the tour in-progress so it resumes, rather than burning the operator's
+   * one skip on a reflex keypress. Skip remains the button that means never.
+   */
+  const dismissTour = useCallback(() => {
+    setTourStep((current) => {
+      persistTour({ status: 'in-progress', step: current, version: TOUR_VERSION });
+      return current;
+    });
     setTourActive(false);
     setView(tourReturnView.current);
   }, [persistTour]);
@@ -256,6 +292,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }): JSX.
         case 'project-open':
           setProject(e.payload);
           break;
+        case 'scope-changed':
+        case 'ca-changed':
+        case 'engagement-changed':
+          setEngagementTick((t) => t + 1);
+          break;
         default:
           break;
       }
@@ -289,6 +330,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }): JSX.
       findingsCount,
       jobs,
       exchangeTick,
+      engagementTick,
       view,
       theme,
       toast,
@@ -311,6 +353,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }): JSX.
       emergencyStop,
       startTour,
       skipTour,
+      dismissTour,
       stepTour,
     }),
     [
@@ -322,6 +365,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }): JSX.
       findingsCount,
       jobs,
       exchangeTick,
+      engagementTick,
       view,
       theme,
       toast,
@@ -336,6 +380,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }): JSX.
       emergencyStop,
       startTour,
       skipTour,
+      dismissTour,
       stepTour,
     ],
   );

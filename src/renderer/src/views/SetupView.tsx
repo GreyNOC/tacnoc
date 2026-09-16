@@ -31,6 +31,7 @@ const ACTION_LABEL: Record<Exclude<SetupDestination, 'none'>, string> = {
   scope: 'Open Scope',
   certificate: 'Open Certificate',
   history: 'Open HTTP History',
+  settings: 'Open Settings',
   proxy: 'Start the proxy',
 };
 
@@ -52,7 +53,7 @@ export function SetupView(): JSX.Element {
 
   // Re-run whenever something that preflight measures could have moved: the
   // proxy starting, scope changing, a CA appearing, traffic arriving.
-  useEffect(load, [load, s.proxy.running, s.exchangeTick, s.project]);
+  useEffect(load, [load, s.proxy.running, s.exchangeTick, s.engagementTick, s.project]);
 
   const act = async (destination: SetupDestination): Promise<void> => {
     if (destination === 'none') return;

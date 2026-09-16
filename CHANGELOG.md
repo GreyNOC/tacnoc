@@ -37,13 +37,23 @@ corrupt file. An end-to-end test relaunches the app against the same profile to
 prove the skip survived the round trip, which is the only thing that actually
 demonstrates "skippable".
 
-### Fixed — IPC dispatch
+### Fixed — IPC dispatch resolved inherited `Object.prototype` keys
 
-- **IPC dispatch resolved inherited `Object.prototype` keys.** The handler map is
-  an object literal, so `constructor` and `toString` reached dispatch despite not
-  being on the allowlist. Now an `Object.hasOwn` check. No capability was
-  reachable this way — the values are not callable handlers — but the allowlist
-  should be the only thing deciding.
+The handler map is an object literal, so `constructor` and `toString` reached
+dispatch from the renderer despite not being on the allowlist. Now an
+`Object.hasOwn` check.
+
+This was closer than it looks. `handlers['constructor']` is `Object`, which **is
+callable**: the old dispatch invoked it as `Object(session, getWindow, args)`,
+and `Object(x)` returns `x` — the live session object — which then had only
+Electron's structured clone between it and the renderer. `toString` likewise
+resolved and returned a string instead of the "unknown method" it should have.
+Worth stating plainly because the first draft of this note claimed neither value
+was callable, which is wrong.
+
+Note that `src/preload/index.ts` forwards any method string: `INVOKE_METHODS` is
+an allowlist enforced at dispatch plus a startup parity assert, not a gate at the
+bridge.
 
 ### Fixed — response bodies in an evidence bundle were unreadable, and the file said otherwise
 

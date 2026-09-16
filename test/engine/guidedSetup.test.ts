@@ -15,6 +15,7 @@ import {
   TOUR_VERSION,
   advanceTour,
   defaultUiPreferences,
+  CHECK_DESTINATIONS,
   destinationForCheck,
   parseUiPreferences,
   restartTour,
@@ -52,6 +53,15 @@ describe('preference repair', () => {
     expect(parseUiPreferences({ tour: { status: 'banana' } }).tour.status).toBe('unseen');
   });
 
+  it('clamps a version from the future, which would suppress the tour for good', () => {
+    // shouldOfferTour compares the stored version against TOUR_VERSION; an
+    // unclamped 1e308 makes every comparison false, permanently.
+    const parsed = parseUiPreferences({ tour: { status: 'done', version: 1e308 } });
+    expect(parsed.tour.version).toBe(TOUR_VERSION);
+    expect(shouldOfferTour(parsed)).toBe(false);
+    expect(shouldOfferTour(parsed, TOUR_VERSION + 1)).toBe(true);
+  });
+
   it('does not treat a non-finite step as a number', () => {
     expect(parseUiPreferences({ tour: { step: Number.NaN } }).tour.step).toBe(0);
     expect(parseUiPreferences({ tour: { step: Infinity } }).tour.step).toBe(0);
@@ -72,6 +82,13 @@ describe('when the walkthrough is offered', () => {
   it('offers again once the content version moves on', () => {
     expect(shouldOfferTour(prefsWith({ status: 'skipped', version: TOUR_VERSION - 1 }))).toBe(true);
     expect(shouldOfferTour(prefsWith({ status: 'done', version: TOUR_VERSION - 1 }))).toBe(true);
+  });
+
+  it('does not resume into content that has changed underneath the index', () => {
+    // Step 14 of a 17-step v1 tour is not step 14 of v2. A valid index is not
+    // the same as the right one.
+    const stale = prefsWith({ status: 'in-progress', step: 13, version: TOUR_VERSION - 1 });
+    expect(resumeStep(stale, 17)).toBe(0);
   });
 
   it('resumes only an in-progress tour, and never past the end', () => {
@@ -131,7 +148,13 @@ describe('tour content', () => {
    */
   it('names only views the app actually renders', () => {
     const app = readFileSync(path.join(root, 'src/renderer/src/App.tsx'), 'utf8');
-    const activeView = app.slice(app.indexOf('function ActiveView'));
+    const start = app.indexOf('function ActiveView');
+    // Without this, a rename yields slice(-1) and the guard fails with a
+    // baffling "expected 0 to be greater than 10" instead of saying what broke.
+    expect(start, 'ActiveView not found in App.tsx — this guard needs updating').toBeGreaterThan(
+      -1,
+    );
+    const activeView = app.slice(start);
     const rendered = new Set([...activeView.matchAll(/case '([a-z]+)':/g)].map((m) => m[1] ?? ''));
     expect(rendered.size).toBeGreaterThan(10);
     for (const step of TOUR_STEPS) {
@@ -146,12 +169,27 @@ describe('setup checklist routing', () => {
     expect(destinationForCheck('authorization')).toBe('engagement');
     expect(destinationForCheck('user-agent')).toBe('engagement');
     expect(destinationForCheck('workspace')).toBe('engagement');
-    expect(destinationForCheck('history')).toBe('history');
     expect(destinationForCheck('ca')).toBe('certificate');
     expect(destinationForCheck('ca-expiring')).toBe('certificate');
     expect(destinationForCheck('ca-key-storage')).toBe('certificate');
+  });
+
+  /**
+   * The bug the prefix-matching version shipped: `proxy-bind` fires ONLY while
+   * the proxy is already running (`getProxyStatus` hardcodes `loopbackOnly`
+   * true when it is not), so routing it to a "Start the proxy" button gave the
+   * top blocker a control that does nothing. Only the listener config clears it.
+   */
+  it('separates "the proxy is off" from "the proxy is bound somewhere it should not be"', () => {
     expect(destinationForCheck('proxy')).toBe('proxy');
-    expect(destinationForCheck('proxy-bind')).toBe('proxy');
+    expect(destinationForCheck('proxy-bind')).toBe('settings');
+  });
+
+  it('offers no button where no control would help', () => {
+    // "Route the test browser through the proxy" — nothing in this app does that,
+    // and "Open HTTP History" would just reopen the empty table it complained about.
+    expect(destinationForCheck('history')).toBe('none');
+    expect(destinationForCheck('project')).toBe('none');
   });
 
   it('falls back rather than throwing on an id it has never seen', () => {
@@ -159,18 +197,34 @@ describe('setup checklist routing', () => {
   });
 
   /**
-   * Drift guard. Preflight is free to add checks; if one arrives with no route,
-   * the operator gets an item on the checklist and no way to act on it. `project`
-   * is the deliberate exception — it reports the project itself, which is already
-   * open by the time anyone can read the checklist.
+   * Drift guard, tightened.
+   *
+   * The previous version asserted a route merely EXISTED, and prefix rules made
+   * that automatic for anything starting `ca` or `proxy` — which is how a
+   * mislabelled no-op button passed it. This asserts each id was considered:
+   * present as a key in the table, `'none'` included as a deliberate answer.
    */
-  it('routes every check id preflight can emit', () => {
+  it('has a considered destination for every check id preflight can emit', () => {
     const src = readFileSync(path.join(root, 'src/engine/engagement/preflight.ts'), 'utf8');
-    const ids = new Set([...src.matchAll(/\bid: '([a-z0-9-]+)'/g)].map((m) => m[1] ?? ''));
+
+    // Deliberately permissive about the id's shape — the older `[a-z0-9-]+`
+    // pattern silently skipped camelCase, and so would have missed a new check.
+    const ids = new Set([...src.matchAll(/\sid:\s*'([^']+)'/g)].map((m) => m[1] ?? ''));
     expect(ids.size).toBeGreaterThan(5);
-    const unrouted = [...ids].filter(
-      (id) => id !== 'project' && destinationForCheck(id) === 'none',
-    );
-    expect(unrouted, 'preflight checks with no way to act on them').toEqual([]);
+
+    const unconsidered = [...ids].filter((id) => !Object.hasOwn(CHECK_DESTINATIONS, id));
+    expect(unconsidered, 'preflight check ids with no entry in CHECK_DESTINATIONS').toEqual([]);
+
+    // A non-literal id (`id: SOME_CONST`) is invisible to the regex above, so the
+    // guard would pass while covering nothing. Fail loudly instead.
+    const computed = [...src.matchAll(/\sid:\s*(?!')([A-Za-z_$][\w$]*)/g)].map((m) => m[1]);
+    expect(computed, 'preflight uses a non-literal check id; this guard cannot see it').toEqual([]);
+  });
+
+  it('does not list destinations for checks preflight cannot emit', () => {
+    const src = readFileSync(path.join(root, 'src/engine/engagement/preflight.ts'), 'utf8');
+    const ids = new Set([...src.matchAll(/\sid:\s*'([^']+)'/g)].map((m) => m[1] ?? ''));
+    const stale = Object.keys(CHECK_DESTINATIONS).filter((id) => !ids.has(id));
+    expect(stale, 'CHECK_DESTINATIONS entries for checks that no longer exist').toEqual([]);
   });
 });
