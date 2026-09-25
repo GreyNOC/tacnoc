@@ -73,6 +73,7 @@ import { defaultEngagementProfile, validateEngagementProfile } from '../shared/e
 import { checkIdentity, identityEnforced } from './engagement/identity.js';
 import { buildPreflight } from './engagement/preflight.js';
 import {
+  countProposedHosts,
   proposeScope,
   type ProposalSource,
   type ScopeProposal,
@@ -1240,7 +1241,8 @@ export class TacnocSession extends EventEmitter {
     return { projectDirectory, created, scan };
   }
 
-  async proposeScopeFromWorkspace(): Promise<ScopeProposal> {
+  /** The bounded set of workspace documents scope is read out of. */
+  private async loadWorkspaceSources(): Promise<ProposalSource[]> {
     const listing = await this.listWorkspace();
     const readable = listing.entries.filter((e) => e.kind === 'file' && e.readable);
     // Read the likely policy documents first, then anything else, bounded.
@@ -1258,7 +1260,24 @@ export class TacnocSession extends EventEmitter {
         continue; // unreadable/binary: skip rather than fail the whole proposal
       }
     }
-    return proposeScope(sources);
+    return sources;
+  }
+
+  async proposeScopeFromWorkspace(): Promise<ScopeProposal> {
+    return proposeScope(await this.loadWorkspaceSources());
+  }
+
+  /**
+   * How many hosts the engagement folder names, for a readiness message.
+   *
+   * Deliberately NOT `proposeScopeFromWorkspace()`: the callers below want a
+   * count and a handful of examples, and building the full candidate list to
+   * get them cost hundreds of megabytes on a folder holding recon output.
+   */
+  private async countWorkspaceHosts(
+    sampleLimit: number,
+  ): Promise<{ count: number; sample: string[] }> {
+    return countProposedHosts(await this.loadWorkspaceSources(), sampleLimit);
   }
 
   /** Erase the cross-engagement hunt memory. */
@@ -1322,21 +1341,26 @@ export class TacnocSession extends EventEmitter {
     // Only read the folder for proposals when scope is actually empty — that is
     // the one case where the answer changes what the operator should do next.
     let proposedScopeHosts: string[] = [];
+    let proposedScopeCount = 0;
     if (project.scope.include.filter((r) => r.enabled !== false).length === 0) {
       try {
-        const proposal = await this.proposeScopeFromWorkspace();
-        // Include the AMBIGUOUS candidates too. Most hunt folders are a bare
-        // list of assets with no "In scope" heading above them, so everything
-        // lands in `unclear` — and reporting only the confidently-classified
-        // ones made preflight say "nothing found" about a folder that plainly
-        // names the targets. The operator still ticks each one.
-        proposedScopeHosts = [...proposal.include, ...proposal.unclear].map((c) => c.host);
+        // Counted, not proposed. `buildPreflight` uses only the length and the
+        // first handful of names, and building the whole candidate list to
+        // supply that was the single most expensive thing the Engagement view
+        // did on open — on the same folder it then asked for a second time.
+        // Ambiguous hosts are counted too: most hunt folders are a bare asset
+        // list with no "In scope" heading, so reporting only the confidently
+        // classified ones said "nothing found" about a folder plainly naming
+        // the targets.
+        const counted = await this.countWorkspaceHosts(8);
+        proposedScopeHosts = counted.sample;
+        proposedScopeCount = counted.count;
       } catch {
         proposedScopeHosts = [];
       }
     }
     return buildPreflight({
-      ...(proposedScopeHosts.length ? { proposedScopeHosts } : {}),
+      ...(proposedScopeHosts.length ? { proposedScopeHosts, proposedScopeCount } : {}),
       project: {
         name: info?.name ?? '(unnamed)',
         directory: project.directory,
@@ -1460,12 +1484,14 @@ export class TacnocSession extends EventEmitter {
       'Scope is empty (fail-closed): add at least one ENABLED in-scope host before running the ' +
       'mesh — every request would otherwise be refused.';
     try {
-      const proposal = await this.proposeScopeFromWorkspace();
-      const hosts = [...proposal.include, ...proposal.unclear].map((c) => c.host);
-      if (!hosts.length) return `${base} No hosts were found in the engagement folder either.`;
+      // Counted, not proposed — this runs on every mesh run against an empty
+      // scope, and building the full candidate list for one sentence cost
+      // seconds and hundreds of megabytes on a folder holding recon output.
+      const { count, sample } = await this.countWorkspaceHosts(6);
+      if (!count) return `${base} No hosts were found in the engagement folder either.`;
       return (
-        `${base} Your engagement folder names ${hosts.length} host(s): ` +
-        `${hosts.slice(0, 6).join(', ')}${hosts.length > 6 ? `, +${hosts.length - 6} more` : ''}. ` +
+        `${base} Your engagement folder names ${count} host(s): ` +
+        `${sample.join(', ')}${count > sample.length ? `, +${count - sample.length} more` : ''}. ` +
         'Open Engagement → Proposed scope to check them against the program page and add them.'
       );
     } catch {

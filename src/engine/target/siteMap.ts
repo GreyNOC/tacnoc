@@ -100,15 +100,41 @@ export function buildTargetMap(
     }
   }
 
+  // Scope was evaluated once per ENDPOINT, and each evaluation scans every rule
+  // — so this loop was O(endpoints x rules). Measured at getTargetMap's default
+  // of 100,000 exchanges: 14.9s with 1,000 rules and 462s (7.7 minutes) with
+  // 30,000, all of it synchronous on the main process, triggered by nothing more
+  // than clicking the Target tab.
+  //
+  // Every endpoint of a site shares that site's scheme, host and port; only the
+  // path differs. So when no rule constrains a path at all — the common case,
+  // and always the case for rules built from a hunt folder, since
+  // `scopeRulesFromProposal` never sets one — the decision is constant across
+  // the whole site and can be made once. Otherwise fall back to the per-endpoint
+  // call. This calls the same `evaluateScope` with the same inputs, so the gate's
+  // answer is unchanged either way.
+  const anyPathRule = scope.include.some((r) => r.path) || scope.exclude.some((r) => r.path);
+
   const resultSites: TargetSite[] = [...sites.entries()].map(([siteId, site]) => {
-    const endpoints: TargetEndpoint[] = [...site.endpoints.values()]
-      .map((endpoint) => {
-        const inScope = evaluateScope(scope, {
+    const constantInScope = anyPathRule
+      ? undefined
+      : evaluateScope(scope, {
           scheme: site.scheme,
           host: site.host,
           port: site.port,
-          path: endpoint.scopePath,
+          path: '/',
         }).inScope;
+
+    const endpoints: TargetEndpoint[] = [...site.endpoints.values()]
+      .map((endpoint) => {
+        const inScope =
+          constantInScope ??
+          evaluateScope(scope, {
+            scheme: site.scheme,
+            host: site.host,
+            port: site.port,
+            path: endpoint.scopePath,
+          }).inScope;
         return {
           id: `${siteId}${endpoint.path}`,
           path: endpoint.path,

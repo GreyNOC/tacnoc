@@ -51,7 +51,31 @@ export interface ScopeProposal {
   unclear: ScopeCandidate[];
   filesRead: number;
   notes: string[];
+  /**
+   * Distinct hosts found but NOT returned, because the candidate cap was hit.
+   * Always 0 for out-of-scope hosts — exclusions are never capped.
+   */
+  omitted: number;
+  /** True when `omitted > 0`. The operator is told, never silently shown less. */
+  truncated: boolean;
 }
+
+/**
+ * Most candidates a proposal will carry.
+ *
+ * A real hunt folder is mostly recon output — `subs.txt`, `all-domains.txt`,
+ * `httpx.log` — and those are readable text, so every hostname in them became a
+ * candidate. Measured on a realistic 70-file recon directory: 508,957
+ * candidates, 250MiB retained, ~2s of blocked main process, and a proposal so
+ * large that serializing it across IPC took another 3.5s. The renderer then
+ * tried to draw a table row for each one.
+ *
+ * The cap exists because a list that long is not reviewable by a human, and this
+ * screen's entire purpose is human review: nothing here reaches the scope gate
+ * without the operator ticking it. Showing 2,000 rows they can read beats
+ * shipping 500,000 they cannot.
+ */
+export const MAX_PROPOSED_CANDIDATES = 2000;
 
 export interface ProposalSource {
   path: string;
@@ -210,6 +234,9 @@ const isHeading = (line: string): boolean =>
  */
 export function proposeScope(sources: ProposalSource[]): ScopeProposal {
   const byHost = new Map<string, ScopeCandidate>();
+  // A Set, not a counter: the same capped-out host recurs on thousands of lines
+  // in a recon dump, and the operator needs the number of distinct hosts elided.
+  const omitted = new Set<string>();
   let filesRead = 0;
 
   for (const source of sources) {
@@ -245,6 +272,18 @@ export function proposeScope(sources: ProposalSource[]): ScopeProposal {
                   : 'it appears in the engagement documents with no scope wording nearby';
 
         const existing = byHost.get(host);
+        if (!existing && byHost.size >= MAX_PROPOSED_CANDIDATES && disposition !== 'exclude') {
+          // Cap reached. Count it and allocate NOTHING — building the candidate
+          // and its evidence is where the memory and ~96% of the CPU went.
+          //
+          // `disposition !== 'exclude'` is load-bearing: a host the documents
+          // put OUT of scope must still be recorded no matter how late in the
+          // folder it appears, because `scopeRulesFromProposal` turns every
+          // exclusion into a rule regardless of what the operator ticks.
+          // Dropping one would silently widen the gate.
+          omitted.add(host);
+          continue;
+        }
         const evidence: ScopeEvidence = {
           file: source.path,
           line: i + 1,
@@ -301,8 +340,64 @@ export function proposeScope(sources: ProposalSource[]): ScopeProposal {
       `${unclear.length} host(s) appear in the documents with no scope wording nearby — decide on those yourself.`,
     );
   }
+  if (omitted.size) {
+    notes.push(
+      `This folder names more hosts than can be reviewed here: ${omitted.size.toLocaleString()} ` +
+        `further host(s) were found and NOT listed, after the first ${MAX_PROPOSED_CANDIDATES.toLocaleString()}. ` +
+        'That is normal for a folder containing recon output — subdomain dumps are not a scope ' +
+        'document. No host your documents describe as OUT of scope was omitted; exclusions are ' +
+        'never capped. If the hosts you need are missing, point the engagement folder at the ' +
+        'directory holding the policy rather than the whole hunt tree, or add them by hand in Scope.',
+    );
+  }
 
-  return { include, exclude, unclear, filesRead, notes };
+  return {
+    include,
+    exclude,
+    unclear,
+    filesRead,
+    notes,
+    omitted: omitted.size,
+    truncated: omitted.size > 0,
+  };
+}
+
+/**
+ * Count the distinct hosts the documents name, and sample a few.
+ *
+ * Preflight and the mesh's empty-scope refusal both want one sentence — "your
+ * folder names N hosts: a, b, c" — and both used to build an entire
+ * `ScopeProposal` to get it, candidates and evidence and all. On a hunt folder
+ * that was hundreds of megabytes and seconds of blocked main process to produce
+ * a number and six strings, on a path that runs every time the Engagement view
+ * opens and on every mesh run against an empty scope.
+ *
+ * It still scans every line, so `count` is exact — a readiness message that
+ * understated the folder would send the operator looking in the wrong place.
+ * What it does not do is allocate anything per host beyond the host itself.
+ *
+ * Deliberately disposition-blind: this only ever prints a message. It never
+ * decides scope, so it cannot widen the gate.
+ */
+export function countProposedHosts(
+  sources: ProposalSource[],
+  sampleLimit = 8,
+): { count: number; sample: string[] } {
+  const seen = new Set<string>();
+  const sample: string[] = [];
+  for (const source of sources) {
+    for (const line of source.content.split(/\r?\n/)) {
+      HOST_RE.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = HOST_RE.exec(line)) !== null) {
+        const host = normalizeHost(match[0]);
+        if (!host || seen.has(host)) continue;
+        seen.add(host);
+        if (sample.length < sampleLimit) sample.push(host);
+      }
+    }
+  }
+  return { count: seen.size, sample };
 }
 
 // ---- turning proposals into scope rules -------------------------------------

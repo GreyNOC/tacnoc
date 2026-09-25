@@ -6,7 +6,64 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed — a real hunt folder made the app hang, then die
+
+Pointing TACNOC at an actual bug-bounty hunt directory — the kind that is mostly
+`subfinder`/`amass`/`httpx` output, tens of thousands of hostnames — froze the
+app and then killed it. Every stage of the pipeline was unbounded, and each one
+multiplied the last. Measured end to end in the real app, adopting a
+95,000-host folder and adding its scope now takes **1.4 seconds**.
+
+- **The scope proposal had no cap.** Every host-shaped token in every readable
+  document became a candidate carrying up to five evidence records. Measured on
+  a realistic 70-file recon directory: **508,957 candidates, 250 MiB, ~2s of
+  blocked main process**, and a proposal so large that serializing it to the
+  renderer took another 3.5s. It is now capped at 2,000 — and the cap is
+  **never silent**: the note says exactly how many hosts were elided. Hosts the
+  documents put OUT of scope are never capped, because
+  `scopeRulesFromProposal` turns every exclusion into a rule regardless of what
+  the operator ticks, so dropping one would silently widen the gate.
+- **The Engagement view drew a table row per candidate.** Measured at 50,000
+  candidates: **1.1M DOM nodes and ~17s of blocked renderer** — the crash. It
+  now renders a page at a time with a host filter that searches the whole list.
+  Pre-ticking follows what is actually on screen, and the add path intersects
+  with what was displayed, so a host the operator never saw cannot reach the
+  safety gate.
+- **The Scope view had the same defect, and fired right after.** Both buckets
+  always render, so surviving the first freeze only got you to a second one on
+  the next click: **800,034 nodes and 8.3s** at 50,000 rules. Also paged, with
+  a filter that searches the entire bucket — this screen is the only place the
+  gate can be audited, so a filter that only searched the visible page would
+  have left that hole open.
+- **The gate re-read and re-parsed the whole scope from SQLite on every
+  request.** `ProjectStore.scope` is a getter wired as `getScope: () =>
+  project.scope` into the proxy, repeater, variation engine and mesh. Measured
+  against the real database: 7.4ms at 10,000 rules, 45.5ms at 50,000, on the
+  main event loop, per request. It is now parsed once per write, invalidated at
+  the single point every scope write passes through, and deep-frozen — one
+  object is now shared by every consumer, and an in-place `rule.enabled = true`
+  would otherwise have rewritten the gate for all of them.
+- **Wildcard rules recompiled a RegExp on every evaluation.** 10,000 worst-case
+  lookups against 1,000 rules: **16,074ms wildcard vs 601ms exact**, a 27x
+  penalty — and a policy written in wildcards lands entirely on that path,
+  because `scopeRulesFromProposal` maps every `*.` entry to `wildcard`. Rules
+  now compile once per scope: **1,407ms**, with `exact` down to 72ms. `enabled`
+  is still read live, so toggling a rule takes effect immediately.
+- **The target map ran a full rule scan per endpoint.** Measured at
+  `getTargetMap`'s default of 100,000 exchanges: 14.9s with 1,000 rules and
+  **462s — 7.7 minutes — with 30,000**, synchronous on the main process,
+  triggered by clicking the Target tab. When no rule constrains a path, the
+  decision is now made once per site instead of once per endpoint; when one
+  does, the per-endpoint path is unchanged.
+- **Preflight built the entire proposal to print a count.** It runs whenever
+  scope is empty — exactly the state after adopting a hunt folder — so opening
+  Engagement paid for it twice, and every mesh run paid for it again. It now
+  counts hosts without constructing candidates. The count stays exact.
+
+None of this changes what the scope gate permits. The evaluator's matching
+semantics, rule ordering, exclude-before-include precedence, and the `*.x` →
+`**.x` translation are all untouched, and a fix that would have traded a hang
+for a wider gate was rejected on those grounds.
 
 ## [0.5.3] — 2026-09-03
 
