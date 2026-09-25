@@ -118,7 +118,8 @@ test('a hunt folder full of recon output stays responsive and never proposes an 
 
   // The Engagement view is where the renderer used to die building one table row
   // per candidate. It must paint, and the window must still answer afterwards.
-  await win.getByRole('button', { name: 'Engagement' }).click();
+  // `exact` because the Setup view also offers an "Open Engagement" shortcut.
+  await win.getByRole('button', { name: 'Engagement', exact: true }).click();
   await expect(
     win.getByRole('heading', { name: 'Proposed scope (from the engagement folder)' }),
   ).toBeVisible({ timeout: 60_000 });
