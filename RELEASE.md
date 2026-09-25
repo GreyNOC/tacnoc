@@ -345,6 +345,46 @@ this bug had been in every release since the CA existed, it is invisible on
 Windows and Linux most of the time, and it took a macOS runner drawing an
 unlucky 16 bytes to expose it.
 
+### v0.6.1 — cut UNSIGNED, built locally (operator decision, 2026-09-25)
+
+`v0.6.1` (the hunt-folder scale fix — see `CHANGELOG.md`) was built and tagged
+with **no code signing**, the same deliberate operator decision as every cut
+before it.
+
+Gate: 443 unit/integration tests green, all 14 E2E specs green **including
+`packaged.spec.ts` against the binary below**, full-tree `npm audit` clean (0
+vulnerabilities), SBOM regenerated. `Get-AuthenticodeSignature` reports
+`NotSigned` on both Windows artifacts — verified, not assumed.
+
+> **This cut was verified locally only.** GitHub Actions did not execute a single
+> job for the PR that produced it: every run failed in seconds with zero steps
+> and an empty log archive, on a workflow file byte-identical to the one passing
+> on `master` beforehand, and a re-run reproduced it exactly. That is an
+> account-level Actions problem (private repo, personal account), not a code
+> one — but it means no independent build verified this release. Treat the
+> numbers above as one workstation's result until CI runs again.
+
+Built on a Windows x64 host — both Windows targets natively, and the Linux
+`tar.gz` cross-built:
+
+| Artifact | SHA-256 |
+|---|---|
+| `TACNOC-0.6.1-Portable-x64.exe` (portable) | `16f611c6cbddf415f7340afc1e539787d81ace907db83d148515e41481f90dde` |
+| `TACNOC-0.6.1-Setup-x64.exe` (NSIS) | `ab068ba6d2f26b78c9ce2b30cbb7cc9b884f657bec4c1568bf192fca56f3ece8` |
+| `TACNOC-0.6.1-linux-x64.tar.gz` (portable, cross-built) | `a026c434d935666b111f8a24284f820bdac350ebc1b9f8ce45d4dc4fe8873b62` |
+
+Manifest: `dist/SHA256SUMS-windows.txt` — named for the build host, not the
+target, so it covers the cross-built Linux archive too (see the note under the
+v0.5.3 entry). The Linux archive was verified by listing it: it unpacks to
+`TACNOC-0.6.1-linux-x64/` containing the `greynoc-tacnoc` executable. **No
+AppImage and no macOS artifact were built on this host.**
+
+The behaviour change worth reading before deploying: **the proposed-scope and
+Scope lists are now paged.** A folder naming more hosts than the cap allows
+reports the elision in its notes rather than showing a silently short list, and
+only hosts that have actually been rendered can be ticked into scope. Exclusions
+are never capped or paged out of the save.
+
 ### v0.6.0 — cut UNSIGNED, built by CI (operator decision, 2026-09-15)
 
 A minor bump rather than a patch: `v0.6.0` adds a user-facing feature, the
