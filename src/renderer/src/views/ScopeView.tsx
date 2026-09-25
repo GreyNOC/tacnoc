@@ -1,7 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.js';
 import type { ScopeConfig, ScopeRule, HostMatchKind } from '@shared/scope.js';
+
+/**
+ * Rules drawn per bucket before "Show more".
+ *
+ * Both lists always render — there is no tab or collapse — so an engagement
+ * adopted from a hunt folder paid for every include AND every exclude at once.
+ * Measured at 50,000 rules: 800,034 DOM nodes and 8.3s of blocked renderer,
+ * which is a second freeze the operator hits immediately after surviving the
+ * first one, just by clicking Scope in the sidebar.
+ */
+const RULE_PAGE = 200;
 
 function newRule(): ScopeRule {
   return {
@@ -27,6 +38,22 @@ export function ScopeView(): JSX.Element {
   // one port); `draft.ports` holds the parsed truth that gets saved.
   const [portsText, setPortsText] = useState('');
   const [list, setList] = useState<'include' | 'exclude'>('include');
+  /** Host filter, applied to the WHOLE bucket — not just the rendered page. */
+  const [filter, setFilter] = useState('');
+  const [shown, setShown] = useState<Record<'include' | 'exclude', number>>({
+    include: RULE_PAGE,
+    exclude: RULE_PAGE,
+  });
+
+  // Filter first, THEN page. Searching only the rendered rows would leave this
+  // screen unable to answer "is this host in my scope?" on a large engagement —
+  // and this view is the only place an operator can audit the gate.
+  const filtered = useMemo(() => {
+    const needle = filter.trim().toLowerCase();
+    if (!needle) return scope;
+    const match = (r: ScopeRule): boolean => r.host.toLowerCase().includes(needle);
+    return { include: scope.include.filter(match), exclude: scope.exclude.filter(match) };
+  }, [scope, filter]);
 
   useEffect(() => {
     // Surface a load failure instead of silently rendering an empty scope — an
@@ -81,51 +108,79 @@ export function ScopeView(): JSX.Element {
     });
   };
 
-  const renderList = (bucket: 'include' | 'exclude'): JSX.Element => (
-    <table className="grid">
-      <thead>
-        <tr>
-          <th>On</th>
-          <th>Match</th>
-          <th>Host</th>
-          <th>Schemes</th>
-          <th>Ports</th>
-          <th>Path</th>
-          <th />
-        </tr>
-      </thead>
-      <tbody>
-        {scope[bucket].map((r) => (
-          <tr key={r.id}>
-            <td>
-              <input
-                type="checkbox"
-                checked={r.enabled}
-                onChange={() => toggleRule(bucket, r.id)}
-              />
-            </td>
-            <td>{r.hostMatch}</td>
-            <td className="mono">{r.host}</td>
-            <td>{r.schemes.join(', ') || 'any'}</td>
-            <td>{r.ports.join(', ') || 'any'}</td>
-            <td className="mono">{r.path ? `${r.path.kind}:${r.path.value}` : 'any'}</td>
-            <td>
-              <button className="ghost" onClick={() => removeRule(bucket, r.id)}>
-                ✕
-              </button>
-            </td>
-          </tr>
-        ))}
-        {scope[bucket].length === 0 && (
-          <tr>
-            <td colSpan={7} className="empty">
-              No {bucket} rules.
-            </td>
-          </tr>
-        )}
-      </tbody>
-    </table>
-  );
+  const renderList = (bucket: 'include' | 'exclude'): JSX.Element => {
+    const matches = filtered[bucket];
+    const page = matches.slice(0, shown[bucket]);
+    const total = scope[bucket].length;
+    return (
+      <>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+          <span className="hint">
+            Showing {page.length.toLocaleString()} of {matches.length.toLocaleString()}
+            {filter.trim() ? ` matching (${total.toLocaleString()} total)` : ''} rule(s)
+          </span>
+          {page.length < matches.length && (
+            <button
+              className="ghost"
+              onClick={() => setShown((s) => ({ ...s, [bucket]: s[bucket] + RULE_PAGE }))}
+            >
+              Show {RULE_PAGE} more
+            </button>
+          )}
+        </div>
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>On</th>
+              <th>Match</th>
+              <th>Host</th>
+              <th>Schemes</th>
+              <th>Ports</th>
+              <th>Path</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {page.map((r) => (
+              <tr key={r.id}>
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={r.enabled}
+                    onChange={() => toggleRule(bucket, r.id)}
+                  />
+                </td>
+                <td>{r.hostMatch}</td>
+                <td className="mono">{r.host}</td>
+                <td>{r.schemes.join(', ') || 'any'}</td>
+                <td>{r.ports.join(', ') || 'any'}</td>
+                <td className="mono">{r.path ? `${r.path.kind}:${r.path.value}` : 'any'}</td>
+                <td>
+                  <button className="ghost" onClick={() => removeRule(bucket, r.id)}>
+                    ✕
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {total === 0 && (
+              <tr>
+                <td colSpan={7} className="empty">
+                  No {bucket} rules.
+                </td>
+              </tr>
+            )}
+            {total > 0 && matches.length === 0 && (
+              <tr>
+                <td colSpan={7} className="empty">
+                  No {bucket} rule matches “{filter.trim()}”.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </>
+    );
+  };
 
   return (
     <div className="view">
@@ -231,7 +286,19 @@ export function ScopeView(): JSX.Element {
         </div>
 
         <div className="card">
-          <h3 style={{ marginTop: 0 }}>Include rules</h3>
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <h3 style={{ margin: 0 }}>Include rules</h3>
+            <input
+              placeholder="filter by host…"
+              style={{ width: 220 }}
+              aria-label="Filter rules by host"
+              value={filter}
+              onChange={(e) => {
+                setFilter(e.target.value);
+                setShown({ include: RULE_PAGE, exclude: RULE_PAGE });
+              }}
+            />
+          </div>
           {renderList('include')}
         </div>
         <div className="card">

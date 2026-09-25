@@ -321,6 +321,13 @@ table.grid {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
+  /*
+   * Auto layout measures every cell in every row to pick column widths, which
+   * is superlinear and was ~87% of the time spent rendering a large scope list.
+   * The cells below already clip with ellipsis at a fixed max-width, so fixed
+   * layout costs nothing visually and removes the measurement pass.
+   */
+  table-layout: fixed;
 }
 table.grid th {
   position: sticky;

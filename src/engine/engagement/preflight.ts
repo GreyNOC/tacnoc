@@ -42,8 +42,18 @@ export interface PreflightInputs {
   proxy: { running: boolean; host?: string; port?: number; loopbackOnly: boolean };
   workspace: WorkspaceSummary;
   history: { exchanges: number; findings: number };
-  /** Hosts the engagement documents describe as in scope, if any were found. */
+  /**
+   * A SAMPLE of the hosts the engagement documents name — up to a handful, for
+   * the message. Not the full list: a hunt folder holding recon output names
+   * hundreds of thousands, and building that list to print eight of them was
+   * the most expensive thing preflight did.
+   */
   proposedScopeHosts?: string[];
+  /**
+   * How many distinct hosts were actually found. Defaults to the sample length
+   * when absent, so a caller that only has the sample still reports honestly.
+   */
+  proposedScopeCount?: number;
   now?: number;
 }
 
@@ -90,12 +100,14 @@ export function buildPreflight(inputs: PreflightInputs): PreflightReport {
     // someone their scope is empty while their own program policy sits unread
     // two directories away is not help.
     const proposed = inputs.proposedScopeHosts ?? [];
+    const proposedCount = inputs.proposedScopeCount ?? proposed.length;
+    const shown = proposed.slice(0, 8);
     checks.push({
       id: 'scope',
       title: 'Scope is empty (fail-closed)',
       severity: 'blocker',
       detail: proposed.length
-        ? `No include rule exists, so every automated request would be refused. Your engagement documents name ${proposed.length} host(s) as in scope: ${proposed.slice(0, 8).join(', ')}${proposed.length > 8 ? `, +${proposed.length - 8} more` : ''}.`
+        ? `No include rule exists, so every automated request would be refused. Your engagement documents name ${proposedCount} host(s) as in scope: ${shown.join(', ')}${proposedCount > shown.length ? `, +${proposedCount - shown.length} more` : ''}.`
         : 'No include rule exists, so the engine would refuse every automated request. Nothing is in scope by default, deliberately.',
       remedy: proposed.length
         ? 'Open Engagement → Proposed scope, check each host against the program page, and add the ones you are authorized to test.'

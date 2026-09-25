@@ -8,7 +8,7 @@
  * of the feature.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.js';
 import { scopeRulesFromProposal, type ScopeProposal } from '@engine/engagement/scopeProposal.js';
@@ -32,6 +32,9 @@ const SEVERITY_LABEL: Record<PreflightCheck['severity'], string> = {
   warning: 'warning',
   ok: 'ok',
 };
+
+/** Candidates drawn per page in the proposed-scope table. See the memo below. */
+const CANDIDATE_PAGE = 200;
 
 export function EngagementView(): JSX.Element {
   const setToast = useStore().setToast;
@@ -66,6 +69,60 @@ export function EngagementView(): JSX.Element {
   const [scanError, setScanError] = useState<string | undefined>(undefined);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [scan, setScan] = useState<DocScanResult | undefined>(undefined);
+  /** Host substring filter over the WHOLE candidate list, not just what is drawn. */
+  const [hostFilter, setHostFilter] = useState('');
+  /** How many matching candidates are currently rendered. */
+  const [shown, setShown] = useState(CANDIDATE_PAGE);
+  /**
+   * Hosts the operator explicitly un-ticked. Revealing more rows re-runs the
+   * pre-tick, and without this a host they deliberately cleared would silently
+   * come back ticked.
+   */
+  const [unticked, setUnticked] = useState<Set<string>>(new Set());
+
+  // A hunt folder's recon output yields thousands of candidates. Rendering a row
+  // for each one built over a million DOM nodes and blocked the renderer for
+  // ~17s at 50,000 — measured — which is the freeze-then-die the operator sees
+  // after pointing TACNOC at a whole hunt directory. Draw a page at a time.
+  const allCandidates = useMemo(
+    () => (proposal ? [...proposal.include, ...proposal.unclear] : []),
+    [proposal],
+  );
+  const matching = useMemo(() => {
+    const needle = hostFilter.trim().toLowerCase();
+    return needle ? allCandidates.filter((c) => c.host.includes(needle)) : allCandidates;
+  }, [allCandidates, hostFilter]);
+  const visible = useMemo(() => matching.slice(0, shown), [matching, shown]);
+
+  /**
+   * Every host that has been rendered at least once, accumulated.
+   *
+   * The add path needs "did the operator see this?", which is NOT the same as
+   * "is it on screen right now". Intersecting with the currently-visible rows
+   * meant ticking a host, typing a filter that hid it, and having it silently
+   * dropped from the save while the button still counted it.
+   */
+  const [reviewed, setReviewed] = useState<Set<string>>(new Set());
+
+  // Pre-tick in-scope candidates the operator can actually SEE, and record what
+  // has been shown. Ticking a host that never rendered would mean adding it to
+  // the safety gate unreviewed, which is what this screen exists to prevent.
+  useEffect(() => {
+    setReviewed((prev) => {
+      const next = new Set(prev);
+      for (const candidate of visible) next.add(candidate.host);
+      return next.size === prev.size ? prev : next;
+    });
+    setPicked((prev) => {
+      const next = new Set(prev);
+      for (const candidate of visible) {
+        if (candidate.disposition === 'include' && !unticked.has(candidate.host)) {
+          next.add(candidate.host);
+        }
+      }
+      return next;
+    });
+  }, [visible, unticked]);
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -87,9 +144,15 @@ export function EngagementView(): JSX.Element {
         .scanEngagementDocs()
         .then(setScan)
         .catch(() => setScan(undefined));
-      // Pre-tick only the hosts the documents call in-scope; the operator still
-      // confirms. Excluded and ambiguous hosts are never pre-selected.
-      setPicked(new Set(found.include.map((c) => c.host)));
+      // Pre-ticking happens in the effect above, against the rows actually on
+      // screen — not the whole include list, which on a hunt folder can be
+      // thousands of hosts the operator never saw. Reset the selection here so a
+      // re-read starts clean.
+      setPicked(new Set());
+      setUnticked(new Set());
+      setReviewed(new Set());
+      setHostFilter('');
+      setShown(CANDIDATE_PAGE);
     } catch (err) {
       // Say why. Silently showing nothing is indistinguishable from "your
       // folder has no scope in it", which sends the operator looking in the
@@ -163,7 +226,15 @@ export function EngagementView(): JSX.Element {
     setBusy(true);
     try {
       const current: ScopeConfig = await api.getScope();
-      const { include, exclude } = scopeRulesFromProposal(proposal, picked, current);
+      // Only hosts the operator has actually SEEN may become scope rules —
+      // everything ever rendered, not merely what the current filter leaves on
+      // screen. `picked` cannot currently hold anything else, but this is the
+      // gate's last line before a rule is written and "the operator reviewed
+      // it" is precisely what it asserts, so it is enforced rather than assumed.
+      // Exclusions are unaffected: `scopeRulesFromProposal` adds them regardless
+      // of ticks by design, and an exclusion must never be dropped.
+      const confirmed = new Set([...picked].filter((host) => reviewed.has(host)));
+      const { include, exclude } = scopeRulesFromProposal(proposal, confirmed, current);
       await api.setScope({
         include: [...current.include, ...(include as unknown as ScopeRule[])],
         exclude: [...current.exclude, ...(exclude as unknown as ScopeRule[])],
@@ -289,8 +360,34 @@ export function EngagementView(): JSX.Element {
                 </p>
               ))}
 
-              {proposal.include.length + proposal.unclear.length > 0 && (
+              {allCandidates.length > 0 && (
                 <>
+                  <div
+                    className="row"
+                    style={{ gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}
+                  >
+                    <input
+                      placeholder="filter by host…"
+                      style={{ width: 220 }}
+                      aria-label="Filter candidates by host"
+                      value={hostFilter}
+                      onChange={(e) => {
+                        setHostFilter(e.target.value);
+                        setShown(CANDIDATE_PAGE);
+                      }}
+                    />
+                    <span className="hint">
+                      Showing {visible.length.toLocaleString()} of{' '}
+                      {matching.length.toLocaleString()}
+                      {hostFilter.trim() ? ' matching' : ''} candidate(s) ·{' '}
+                      {picked.size.toLocaleString()} ticked. Only hosts shown here can be ticked.
+                    </span>
+                    {visible.length < matching.length && (
+                      <button className="ghost" onClick={() => setShown((n) => n + CANDIDATE_PAGE)}>
+                        Show {CANDIDATE_PAGE} more
+                      </button>
+                    )}
+                  </div>
                   <table className="grid" style={{ marginTop: 10 }}>
                     <thead>
                       <tr>
@@ -301,17 +398,28 @@ export function EngagementView(): JSX.Element {
                       </tr>
                     </thead>
                     <tbody>
-                      {[...proposal.include, ...proposal.unclear].map((c) => (
+                      {visible.map((c) => (
                         <tr key={c.host}>
                           <td>
                             <input
                               type="checkbox"
                               checked={picked.has(c.host)}
                               onChange={(e) => {
-                                const next = new Set(picked);
-                                if (e.target.checked) next.add(c.host);
-                                else next.delete(c.host);
-                                setPicked(next);
+                                const checked = e.target.checked;
+                                // Functional updates: each of these rows would
+                                // otherwise close over a full copy of both Sets.
+                                setPicked((prev) => {
+                                  const next = new Set(prev);
+                                  if (checked) next.add(c.host);
+                                  else next.delete(c.host);
+                                  return next;
+                                });
+                                setUnticked((prev) => {
+                                  const next = new Set(prev);
+                                  if (checked) next.delete(c.host);
+                                  else next.add(c.host);
+                                  return next;
+                                });
                               }}
                             />
                           </td>
