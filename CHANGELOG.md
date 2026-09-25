@@ -6,6 +6,10 @@ All notable changes to TACNOC are documented here. The format follows
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.6.1] — 2026-09-25
+
 ### Fixed — a real hunt folder made the app hang, then die
 
 Pointing TACNOC at an actual bug-bounty hunt directory — the kind that is mostly
@@ -59,6 +63,22 @@ multiplied the last. Measured end to end in the real app, adopting a
   scope is empty — exactly the state after adopting a hunt folder — so opening
   Engagement paid for it twice, and every mesh run paid for it again. It now
   counts hosts without constructing candidates. The count stays exact.
+
+Three defects the bounding itself introduced, caught in review and fixed before
+this cut — two of them pointed the unsafe way:
+
+- **Filtering silently discarded reviewed selections.** The add path intersected
+  the ticked hosts with the rows visible *at that moment*, so ticking a host,
+  typing a filter that hid it, and clicking Add dropped it while the button went
+  on advertising the larger count. The view now accumulates every host it has
+  rendered and intersects with that — a host that never rendered still cannot
+  become a rule, but one the operator reviewed is no longer thrown away.
+- **The cheap host counter reported out-of-scope hosts as in-scope.** It was
+  disposition-blind where the path it replaced counted only include and unclear,
+  so a policy naming a host under an "Out of scope" heading made preflight
+  present it as an authorized target.
+- **A host admitted as an exclusion stayed counted as omitted**, producing a
+  truncation warning about a host that was present in the result.
 
 None of this changes what the scope gate permits. The evaluator's matching
 semantics, rule ordering, exclude-before-include precedence, and the `*.x` →

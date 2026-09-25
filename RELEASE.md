@@ -163,6 +163,28 @@ The entries are left in place rather than rewritten, with this correction above
 them, because the point of this file is an accurate record and quietly editing
 the history would defeat it.
 
+### Tag record — third correction (2026-09-25)
+
+**It happened again, twice.** `v0.5.8` and `v0.6.0` are both recorded below as
+cut, and both appear as released headings in `CHANGELOG.md` with their version in
+`package.json` — but neither was ever tagged. `git tag` and `git ls-remote --tags
+origin` agreed: the newest tag was `v0.5.7`, against a `master` whose manifest
+said 0.6.0. Since `release.yml` fires on a `v*` tag, no GitHub release was
+drafted for either, and the artifacts those records describe were CI runs
+triggered by the PR merges rather than by a release.
+
+Neither is backfilled. Retroactively tagging a version whose intended commit has
+to be guessed — the bump commit, or the merge that landed it — would put a
+fabricated claim in the one file whose job is an accurate record, which is the
+mistake the two corrections above already document. They are recorded here as
+untagged and left alone.
+
+The recurrence is the finding: **bumping the version and writing the changelog is
+not cutting a release, and this repository keeps mistaking one for the other.**
+The tag is the only step that triggers `release.yml`, and it is the step that
+keeps getting skipped. Until something enforces it, check `git ls-remote --tags
+origin` against `package.json` before claiming a version shipped.
+
 ### Tag record — second correction (2026-09-15)
 
 The 2026-09-03 correction above was itself incomplete, and the release it
