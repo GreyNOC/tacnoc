@@ -290,6 +290,11 @@ export function proposeScope(sources: ProposalSource[]): ScopeProposal {
           text: line.trim().slice(0, 240),
         };
         if (!existing) {
+          // A host capped out earlier can still be admitted here, because an
+          // exclusion is never capped. It is present in the result, so it is no
+          // longer omitted — leaving it counted would report a truncation that
+          // did not happen and a host as missing while it sits in `exclude`.
+          omitted.delete(host);
           byHost.set(host, {
             host,
             wildcard: host.startsWith('*.'),
@@ -363,7 +368,7 @@ export function proposeScope(sources: ProposalSource[]): ScopeProposal {
 }
 
 /**
- * Count the distinct hosts the documents name, and sample a few.
+ * Count the hosts the documents offer as CANDIDATES, and sample a few.
  *
  * Preflight and the mesh's empty-scope refusal both want one sentence — "your
  * folder names N hosts: a, b, c" — and both used to build an entire
@@ -372,32 +377,64 @@ export function proposeScope(sources: ProposalSource[]): ScopeProposal {
  * a number and six strings, on a path that runs every time the Engagement view
  * opens and on every mesh run against an empty scope.
  *
- * It still scans every line, so `count` is exact — a readiness message that
+ * It still scans every line, so the count is exact — a readiness message that
  * understated the folder would send the operator looking in the wrong place.
- * What it does not do is allocate anything per host beyond the host itself.
+ * What it does not do is allocate evidence, reasons, or candidate objects.
  *
- * Deliberately disposition-blind: this only ever prints a message. It never
- * decides scope, so it cannot widen the gate.
+ * Hosts the documents put OUT of scope are counted SEPARATELY and excluded from
+ * `count`, matching what the full proposal offers as includes. The callers word
+ * their message as "your documents name N host(s) as in scope", so folding an
+ * excluded host into that number would present a host the operator was told not
+ * to touch as an authorized target.
  */
 export function countProposedHosts(
   sources: ProposalSource[],
   sampleLimit = 8,
-): { count: number; sample: string[] } {
-  const seen = new Set<string>();
-  const sample: string[] = [];
+): { count: number; sample: string[]; excluded: number } {
+  // Disposition per host, resolved the same way `proposeScope` resolves it:
+  // exclude wins over everything, and a definite reading beats an unclear one.
+  const seen = new Map<string, 'include' | 'exclude' | 'unclear'>();
+
   for (const source of sources) {
-    for (const line of source.content.split(/\r?\n/)) {
+    const lines = source.content.split(/\r?\n/);
+    let sectionDisposition: 'include' | 'exclude' | undefined;
+
+    for (const line of lines) {
+      if (isHeading(line)) {
+        sectionDisposition = markerDisposition(line) ?? sectionDisposition;
+      }
+      const lineDisposition = markerDisposition(line);
+
       HOST_RE.lastIndex = 0;
       let match: RegExpExecArray | null;
       while ((match = HOST_RE.exec(line)) !== null) {
         const host = normalizeHost(match[0]);
-        if (!host || seen.has(host)) continue;
-        seen.add(host);
-        if (sample.length < sampleLimit) sample.push(host);
+        if (!host) continue;
+        const disposition = lineDisposition ?? sectionDisposition ?? 'unclear';
+        const existing = seen.get(host);
+        if (existing === undefined) {
+          seen.set(host, disposition);
+        } else if (disposition === 'exclude' && existing !== 'exclude') {
+          seen.set(host, 'exclude');
+        } else if (existing === 'unclear' && disposition === 'include') {
+          seen.set(host, 'include');
+        }
       }
     }
   }
-  return { count: seen.size, sample };
+
+  const sample: string[] = [];
+  let count = 0;
+  let excluded = 0;
+  for (const [host, disposition] of seen) {
+    if (disposition === 'exclude') {
+      excluded += 1;
+      continue;
+    }
+    count += 1;
+    if (sample.length < sampleLimit) sample.push(host);
+  }
+  return { count, sample, excluded };
 }
 
 // ---- turning proposals into scope rules -------------------------------------

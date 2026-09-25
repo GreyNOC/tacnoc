@@ -91,6 +91,62 @@ describe('proposal volume', () => {
     expect(sample[0]).toBe('h0.acme.test');
   });
 
+  it('stops counting a host as omitted once an exclusion admits it', () => {
+    // Capped out first as unclear, then admitted later as an exclusion. It IS
+    // in the result, so reporting it as omitted would be a false truncation.
+    const proposal = proposeScope([
+      { path: 'recon/subs.txt', content: 'late.acme.test' },
+      reconDump(MAX_PROPOSED_CANDIDATES + 1, 'filler'),
+      { path: 'policy.md', content: '# Out of scope\nlate.acme.test\n' },
+    ]);
+
+    expect(proposal.exclude.map((c) => c.host)).toContain('late.acme.test');
+    expect(proposal.omitted).toBe(MAX_PROPOSED_CANDIDATES + 1 - (MAX_PROPOSED_CANDIDATES - 1));
+    expect(proposal.notes.join(' ')).not.toMatch(/late\.acme\.test/);
+  });
+
+  it('does not report an out-of-scope host as one the documents call in scope', () => {
+    // The callers word this as "your documents name N host(s) as in scope", so
+    // folding an excluded host into that number would present a host the
+    // operator was told not to touch as an authorized target.
+    const policy: ProposalSource = {
+      path: 'policy.md',
+      content: ['# Out of scope', 'blocked.acme.test', '', '# In scope', 'api.acme.test'].join(
+        '\n',
+      ),
+    };
+    const { count, sample, excluded } = countProposedHosts([policy]);
+
+    expect(sample).toContain('api.acme.test');
+    expect(sample).not.toContain('blocked.acme.test');
+    expect(count).toBe(1);
+    expect(excluded).toBe(1);
+  });
+
+  it('agrees with the full proposal about how many hosts are offered', () => {
+    // The cheap counter and the real extractor must not disagree about what the
+    // folder says, or the readiness message contradicts the screen it points at.
+    const sources: ProposalSource[] = [
+      {
+        path: 'policy.md',
+        content: [
+          '# In scope',
+          'api.acme.test',
+          'app.acme.test',
+          '',
+          '# Out of scope',
+          'billing.acme.test',
+        ].join('\n'),
+      },
+      { path: 'notes.md', content: 'saw stray.acme.test while poking around' },
+    ];
+    const proposal = proposeScope(sources);
+    const counted = countProposedHosts(sources);
+
+    expect(counted.count).toBe(proposal.include.length + proposal.unclear.length);
+    expect(counted.excluded).toBe(proposal.exclude.length);
+  });
+
   it('does not double-count a host repeated across thousands of lines', () => {
     const repeated: ProposalSource = {
       path: 'recon/resolved.txt',

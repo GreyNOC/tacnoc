@@ -136,8 +136,45 @@ test('a hunt folder full of recon output stays responsive and never proposes an 
   });
   expect(pinged).toBeLessThan(5_000);
 
-  // Add what is on screen, then open Scope — the second place it used to freeze.
+  // Filtering must not silently discard an already-reviewed selection. Narrow
+  // the list so most ticked rows are hidden, then confirm the button still
+  // promises them and the save still delivers them.
+  const beforeFilter = await win
+    .getByRole('button', { name: /Add \d+ selected to scope/ })
+    .textContent();
+  const promised = Number(/Add (\d+) selected/.exec(beforeFilter ?? '')?.[1] ?? '0');
+  expect(promised).toBeGreaterThan(0);
+
+  await win.getByLabel('Filter candidates by host').fill('sub1234.bounty-corp.test');
+  await expect(
+    win.getByRole('button', { name: `Add ${promised} selected to scope` }),
+  ).toBeVisible();
+
+  const scopeBefore = await win.evaluate(
+    async () =>
+      (
+        (await (window as unknown as { tacnoc: Bridge }).tacnoc.invoke('getScope')) as {
+          include: unknown[];
+        }
+      ).include.length,
+  );
+
   await win.getByRole('button', { name: /Add \d+ selected to scope/ }).click();
+  await expect(win.getByText(/Added \d+ host\(s\) to scope/)).toBeVisible({ timeout: 30_000 });
+
+  const scopeAfter = await win.evaluate(
+    async () =>
+      (
+        (await (window as unknown as { tacnoc: Bridge }).tacnoc.invoke('getScope')) as {
+          include: unknown[];
+        }
+      ).include.length,
+  );
+  // What the button promised is what was written, even though the filter hid
+  // most of those rows at the moment it was clicked.
+  expect(scopeAfter - scopeBefore).toBe(promised);
+
+  // Then open Scope — the second place it used to freeze.
   await win.getByRole('button', { name: 'Scope', exact: true }).click();
   await expect(win.getByRole('heading', { name: 'Include rules' })).toBeVisible({
     timeout: 60_000,

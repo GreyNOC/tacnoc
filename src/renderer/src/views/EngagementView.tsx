@@ -94,10 +94,25 @@ export function EngagementView(): JSX.Element {
   }, [allCandidates, hostFilter]);
   const visible = useMemo(() => matching.slice(0, shown), [matching, shown]);
 
-  // Pre-tick in-scope candidates the operator can actually SEE. Ticking a host
-  // that never rendered would mean adding it to the safety gate unreviewed,
-  // which is the whole thing this screen exists to prevent.
+  /**
+   * Every host that has been rendered at least once, accumulated.
+   *
+   * The add path needs "did the operator see this?", which is NOT the same as
+   * "is it on screen right now". Intersecting with the currently-visible rows
+   * meant ticking a host, typing a filter that hid it, and having it silently
+   * dropped from the save while the button still counted it.
+   */
+  const [reviewed, setReviewed] = useState<Set<string>>(new Set());
+
+  // Pre-tick in-scope candidates the operator can actually SEE, and record what
+  // has been shown. Ticking a host that never rendered would mean adding it to
+  // the safety gate unreviewed, which is what this screen exists to prevent.
   useEffect(() => {
+    setReviewed((prev) => {
+      const next = new Set(prev);
+      for (const candidate of visible) next.add(candidate.host);
+      return next.size === prev.size ? prev : next;
+    });
     setPicked((prev) => {
       const next = new Set(prev);
       for (const candidate of visible) {
@@ -135,6 +150,7 @@ export function EngagementView(): JSX.Element {
       // re-read starts clean.
       setPicked(new Set());
       setUnticked(new Set());
+      setReviewed(new Set());
       setHostFilter('');
       setShown(CANDIDATE_PAGE);
     } catch (err) {
@@ -210,14 +226,14 @@ export function EngagementView(): JSX.Element {
     setBusy(true);
     try {
       const current: ScopeConfig = await api.getScope();
-      // Only hosts that were actually on screen may become scope rules. `picked`
-      // cannot currently hold anything else, but this is the gate's last line
-      // before a rule is written, and "the operator reviewed it" is precisely
-      // what it is asserting — so it is enforced here rather than assumed.
+      // Only hosts the operator has actually SEEN may become scope rules —
+      // everything ever rendered, not merely what the current filter leaves on
+      // screen. `picked` cannot currently hold anything else, but this is the
+      // gate's last line before a rule is written and "the operator reviewed
+      // it" is precisely what it asserts, so it is enforced rather than assumed.
       // Exclusions are unaffected: `scopeRulesFromProposal` adds them regardless
       // of ticks by design, and an exclusion must never be dropped.
-      const reviewable = new Set(visible.map((c) => c.host));
-      const confirmed = new Set([...picked].filter((host) => reviewable.has(host)));
+      const confirmed = new Set([...picked].filter((host) => reviewed.has(host)));
       const { include, exclude } = scopeRulesFromProposal(proposal, confirmed, current);
       await api.setScope({
         include: [...current.include, ...(include as unknown as ScopeRule[])],
