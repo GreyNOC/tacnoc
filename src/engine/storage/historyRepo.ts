@@ -112,6 +112,26 @@ export class HistoryRepo {
     return this.cipher ? this.cipher.seal(b) : Buffer.from(b);
   }
 
+  /**
+   * Insert many exchanges as one transaction.
+   *
+   * `insert` is its own durable commit, and WAL is unsupported by the WASM VFS
+   * (see `Database.open`), so every row pays a full journal round-trip. That is
+   * the right trade for captured traffic, which arrives one request at a time
+   * and must survive a crash — and the wrong one for a bulk load: 2050 rows
+   * took **86 seconds** on a CI Windows runner, blowing the 20 s test timeout
+   * and failing the v0.5.5 release on the one platform the PR gate did not run.
+   *
+   * The inserts are synchronous, so that time is not merely slow — it blocks
+   * the event loop, which is why the runner reported 86 s against a 20 s limit
+   * instead of aborting at 20 s.
+   */
+  insertMany(exchanges: readonly HttpExchange[]): void {
+    this.db.transaction(() => {
+      for (const ex of exchanges) this.insert(ex);
+    });
+  }
+
   insert(ex: HttpExchange): void {
     const req = ex.request;
     const res = ex.response;

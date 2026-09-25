@@ -27,7 +27,7 @@ import type {
 } from '../shared/detail.js';
 import type { Finding, SuppressionRule } from '../shared/findings.js';
 import type { RepeaterOptions, RepeaterResult } from '../shared/repeater.js';
-import type { ProjectInfo, SavedRequest } from '../shared/project.js';
+import type { AuditEntry, ProjectInfo, SavedRequest } from '../shared/project.js';
 import type { JobProgress, VariationPlan, VariationResultRow } from '../shared/variation.js';
 import type { InterceptState, RequestDecision, ResponseDecision } from '../shared/intercept.js';
 import { ProjectStore, resolveProjectDir } from './project/projectStore.js';
@@ -42,7 +42,15 @@ import { readBodyBytes } from './storage/bodyCollector.js';
 import { BUILTIN_TRANSFORMS, applyTransform as applyBuiltinTransform } from './transforms/codec.js';
 import { detectSensitive, Redactor, redactAiValue } from './redaction/redactor.js';
 import { isLoopbackBind } from './config.js';
-import { Logger, rootLogger } from './logging/logger.js';
+import { consoleSink, Logger } from './logging/logger.js';
+import { LogBuffer, teeSink } from './logging/logBuffer.js';
+import type {
+  AgentHandoff,
+  AgentHandoffResult,
+  EvidenceBundleOptions,
+} from '../shared/evidence.js';
+import { buildEvidenceBundle, DEFAULT_MAX_EXCHANGES, type BuiltBundle } from './evidence/bundle.js';
+import { normalizeHost, evaluateScope } from './scope/scope.js';
 import type { SecretStore } from './ca/secretStore.js';
 import type { Scheme } from '../shared/model.js';
 import type { TargetMap } from '../shared/target.js';
@@ -132,6 +140,12 @@ export interface SessionOptions {
    * a different project. Omit to disable the feature entirely.
    */
   huntMemoryDir?: string;
+  /**
+   * Tail of the structured log, for the diagnostics export. One is created if
+   * none is given; supply one to share a buffer with a logger you built
+   * yourself, since a `Logger`'s sink cannot be changed after construction.
+   */
+  logBuffer?: LogBuffer;
 }
 
 export interface ProxyStatus {
@@ -151,6 +165,7 @@ export class TacnocSession extends EventEmitter {
   private readonly extHost: ExtensionHost;
   private readonly cookieJar = new CookieJar();
   private readonly log: Logger;
+  private readonly logBuffer: LogBuffer;
   private readonly appVersion: string;
   private readonly secretStoreFactory?: (dir: string) => SecretStore;
   private readonly aiSecretStore?: SecretStore;
@@ -166,7 +181,13 @@ export class TacnocSession extends EventEmitter {
 
   constructor(options: SessionOptions = {}) {
     super();
-    this.log = options.logger ?? rootLogger;
+    this.logBuffer = options.logBuffer ?? new LogBuffer();
+    // `rootLogger` writes only to the console, which in a packaged Electron app
+    // goes somewhere no operator can reach. Keep a redacted tail so there is
+    // something to hand over when a run misbehaves — teed, so anyone running
+    // from a terminal still sees every line.
+    this.log =
+      options.logger ?? new Logger('tacnoc', { sink: teeSink(this.logBuffer, consoleSink) });
     this.appVersion = options.appVersion ?? '0.1.0';
     if (options.secretStoreFactory) this.secretStoreFactory = options.secretStoreFactory;
     if (options.aiSecretStore) this.aiSecretStore = options.aiSecretStore;
@@ -292,6 +313,12 @@ export class TacnocSession extends EventEmitter {
     this.scanner = undefined;
     this.repeater = undefined;
     this.variation = undefined;
+    // The buffer is built once per Session and the Session outlives every
+    // project opened in it, so records from the last engagement sat in the tail
+    // waiting to be exported into the next one's diagnostics — up to 5000 of
+    // them, naming a different client's hosts. A tail describes the project it
+    // was recorded against; when that project closes, so does the tail.
+    this.logBuffer.clear();
   }
 
   /**
@@ -836,11 +863,21 @@ export class TacnocSession extends EventEmitter {
    * the enforced scope, the engagement folder, and the ranked attack surface are
    * all computed here, deterministically, from the project. Handing it over keeps
    * a declined turn from costing the whole run.
+   *
+   * `options.host` narrows it to one target, and an evidence bundle must pass
+   * it. Unnarrowed, this ranks every site in the project and names the
+   * engagement folder with up to twenty of its filenames — which is right for
+   * the live UI and the mesh, since neither leaves the machine, and wrong for a
+   * file a triager opens: a bundle that shipped one host's exchanges was
+   * handing over another client's endpoints, the folder path named after them,
+   * and the local CA's particulars alongside.
    */
-  async engineBriefing(): Promise<string> {
+  async engineBriefing(options: { host?: string } = {}): Promise<string> {
+    const scopedTo = options.host ? normalizeHost(options.host) : undefined;
     const lines: string[] = [
       'ENGINE BRIEFING — produced by TACNOC itself, from the open project. Every fact below is ' +
-        'read from the project, not inferred.',
+        'read from the project, not inferred.' +
+        (scopedTo ? ` Narrowed to ${scopedTo}; the project may hold other targets.` : ''),
       '',
     ];
 
@@ -865,29 +902,41 @@ export class TacnocSession extends EventEmitter {
       blockers = report.checks.filter((c) => c.severity === 'blocker').map((c) => c.title);
       lines.push(`## Readiness: ${report.ready ? 'ready' : 'NOT ready — blockers below'}`);
       for (const c of report.checks) {
-        lines.push(`- [${c.severity}] ${c.title}${c.detail ? ` — ${c.detail}` : ''}`);
+        // Narrowed, the titles travel and the details stay behind: a check's
+        // detail is where this machine's particulars live — the CA subject and
+        // its fingerprint, local paths — and a triager needs to know what was
+        // not ready, not what the operator's installation looks like.
+        const detail = c.detail && !scopedTo ? ` — ${c.detail}` : '';
+        lines.push(`- [${c.severity}] ${c.title}${detail}`);
       }
       lines.push('');
     } catch {
       /* readiness is best-effort here */
     }
 
-    try {
-      const listing = await this.listWorkspace();
-      lines.push(`## Engagement folder: ${listing.root}`);
-      lines.push(
-        listing.fileCount
-          ? `${listing.fileCount} document(s): ${listing.notableFiles.slice(0, 20).join(', ')}`
-          : 'No readable documents. Read them with the workspace tools if this is wrong.',
-      );
-      lines.push('');
-    } catch {
-      /* folder is best-effort here */
+    // The engagement folder is the operator's, and its filenames routinely name
+    // the client. Omit it entirely rather than trying to decide which of them
+    // are safe to name.
+    if (!scopedTo) {
+      try {
+        const listing = await this.listWorkspace();
+        lines.push(`## Engagement folder: ${listing.root}`);
+        lines.push(
+          listing.fileCount
+            ? `${listing.fileCount} document(s): ${listing.notableFiles.slice(0, 20).join(', ')}`
+            : 'No readable documents. Read them with the workspace tools if this is wrong.',
+        );
+        lines.push('');
+      } catch {
+        /* folder is best-effort here */
+      }
     }
 
     try {
-      const ranking = this.rankAttackSurface(20);
-      lines.push('## Ranked attack surface (in-scope endpoints, best first)');
+      const ranking = this.rankAttackSurface(20, scopedTo);
+      lines.push(
+        `## Ranked attack surface (in-scope endpoints${scopedTo ? ` on ${scopedTo}` : ''}, best first)`,
+      );
       lines.push(
         ranking.leads.length
           ? ranking.leads
@@ -923,6 +972,238 @@ export class TacnocSession extends EventEmitter {
       ].join('\n');
     }
     return lines.join('\n');
+  }
+
+  // ---- evidence bundles, logs, and the agent handoff ----
+
+  /**
+   * Everything the project holds about one host, gathered exactly.
+   *
+   * `HistoryRepo`'s host filter is `LIKE '%host%'`, which also matches
+   * `notexample.com.evil.net`. Using it to decide what goes into a shareable
+   * bundle would hand a triager another target's traffic, so it is used only to
+   * narrow the scan and every row is then matched on an exact, normalized host.
+   */
+  private async collectTargetEvidence(
+    host: string,
+    maxExchanges: number,
+  ): Promise<{
+    host: string;
+    exchanges: ExchangeSummary[];
+    exchangesAvailable: number;
+    findings: Finding[];
+    audit: AuditEntry[];
+    sites: TargetMap['sites'];
+    targetInScope: boolean;
+  }> {
+    this.requireProject();
+    const wanted = normalizeHost(host);
+    if (!wanted) throw new Error('An evidence bundle needs a target host.');
+
+    // `HistoryRepo.query` clamps every page to 2000 rows however large a limit
+    // it is handed, and the host filter is a SUBSTRING match. One query could
+    // therefore be filled entirely by impostor hosts, or stop short of a host
+    // with more than 2000 exchanges — under-counting `exchangesAvailable`,
+    // returning fewer than asked for, and silently dropping findings, since
+    // they are joined against these ids. Page until the matches run out.
+    const PAGE = 2000;
+    const SCAN_CAP = 100_000; // the bound the site map already uses
+    const exact: ExchangeSummary[] = [];
+    let offset = 0;
+    let total = Number.POSITIVE_INFINITY;
+    let scanned = 0;
+    while (offset < total && scanned < SCAN_CAP) {
+      const page = this.queryHistory({ host: wanted, limit: PAGE, offset, sort: 'desc' });
+      total = page.total;
+      if (page.rows.length === 0) break;
+      for (const row of page.rows) {
+        if (normalizeHost(row.host) === wanted) exact.push(row);
+      }
+      offset += page.rows.length;
+      scanned += page.rows.length;
+    }
+    const exchanges = exact.slice(0, maxExchanges);
+
+    // Findings carry an exchange id and no host, so the join runs through the
+    // exchanges that are actually this host's.
+    const ids = new Set(exact.map((e) => e.id));
+    const findings = this.listFindings(true).filter((f) => ids.has(f.exchangeId));
+
+    // Audit targets are URLs or bare hosts, redacted at write time. Compare the
+    // host component so a path that happens to contain the name cannot pull a
+    // row in.
+    const audit = this.listAudit(1000).filter((e) => {
+      const t = e.target;
+      if (!t) return false;
+      if (normalizeHost(t) === wanted) return true;
+      try {
+        return normalizeHost(new URL(t).hostname) === wanted;
+      } catch {
+        return false;
+      }
+    });
+
+    const sites = this.getTargetMap().sites.filter((s) => normalizeHost(s.host) === wanted);
+
+    // Scope is evaluated per origin AND per path. Asking about one pathless
+    // origin marked a target out of scope whenever its rule carried a path
+    // prefix — `/api` never matches the default `/` — and the handoff then
+    // refused a target whose captured endpoints were perfectly in scope. It
+    // also only ever consulted the first origin, so a host seen on two schemes
+    // or ports was judged on one of them. Ask the endpoints the site map has
+    // already evaluated, and fall back to both schemes when nothing has been
+    // captured for this host yet.
+    const scope = this.getScope();
+    const targetInScope = sites.length
+      ? sites.some(
+          (s) =>
+            s.endpoints.some((e) => e.inScope) ||
+            evaluateScope(scope, { scheme: s.scheme, host: wanted, port: s.port }).inScope,
+        )
+      : (['https', 'http'] as const).some(
+          (scheme) =>
+            evaluateScope(scope, {
+              scheme,
+              host: wanted,
+              port: scheme === 'https' ? 443 : 80,
+            }).inScope,
+        );
+
+    return {
+      host: wanted,
+      exchanges,
+      exchangesAvailable: exact.length,
+      findings,
+      audit,
+      sites,
+      targetInScope,
+    };
+  }
+
+  private logsForBundle(): { jsonl: string; count: number; dropped: number } {
+    return {
+      jsonl: this.logBuffer.toJsonl(),
+      count: this.logBuffer.size(),
+      dropped: this.logBuffer.droppedCount(),
+    };
+  }
+
+  /**
+   * Build a target's bundle in memory.
+   *
+   * The caller writes it. The engine deciding where a file lands would put the
+   * operator's consent to a specific path somewhere other than the save dialog,
+   * and that dialog is the only authorization this write has.
+   */
+  async buildTargetEvidenceBundle(
+    host: string,
+    options: EvidenceBundleOptions = {},
+  ): Promise<BuiltBundle> {
+    const max = Math.max(1, options.maxExchanges ?? DEFAULT_MAX_EXCHANGES);
+    const collected = await this.collectTargetEvidence(host, max);
+    return buildEvidenceBundle(
+      {
+        appVersion: this.appVersion,
+        host: collected.host,
+        profile: this.getEngagementProfile(),
+        scope: this.getScope(),
+        sites: collected.sites,
+        exchanges: collected.exchanges,
+        exchangesAvailable: collected.exchangesAvailable,
+        detail: (id) => this.getExchangeDetail(id),
+        findings: collected.findings,
+        audit: collected.audit,
+        engineBriefing: (scopedHost) => this.engineBriefing({ host: scopedHost }),
+        logs: options.includeLogs === true ? this.logsForBundle() : null,
+        redactor: this.aiRedactor,
+        targetInScope: collected.targetInScope,
+        now: Date.now(),
+      },
+      options,
+    );
+  }
+
+  /**
+   * The handoff alone — for previewing what would be handed over, and for
+   * seeding a live mesh run without writing a file.
+   */
+  async buildTargetHandoff(
+    host: string,
+    options: EvidenceBundleOptions = {},
+  ): Promise<AgentHandoff> {
+    const built = await this.buildTargetEvidenceBundle(host, { ...options, includeHandoff: true });
+    return built.handoff;
+  }
+
+  /**
+   * Record that a bundle actually reached disk.
+   *
+   * Called by the main process after the write, not by the builder: a bundle
+   * the operator cancelled at the save dialog was never created, and auditing
+   * it would put an export in the record that never happened.
+   */
+  recordEvidenceExport(host: string, detail: Record<string, unknown>): void {
+    this.project?.audit.append({
+      ts: Date.now(),
+      actor: 'operator',
+      action: 'evidence.bundle-exported',
+      target: host,
+      detail,
+    });
+  }
+
+  /** The redacted log tail as JSON Lines, with what the ring buffer discarded. */
+  exportLogTail(): { jsonl: string; count: number; dropped: number } {
+    return this.logsForBundle();
+  }
+
+  /**
+   * Hand a target to this app's own mesh.
+   *
+   * Deliberately routed through `startMeshRun`, so every gate a manual run
+   * passes applies unchanged: the fail-closed scope check, the API key, and the
+   * egress acknowledgement. A handoff that bypassed them would be a way to
+   * start an unacknowledged run under another name.
+   */
+  async handoffTargetToMesh(
+    host: string,
+    options: EvidenceBundleOptions = {},
+  ): Promise<AgentHandoffResult> {
+    const handoff = await this.buildTargetHandoff(host, options);
+    if (handoff.authorization.failClosed) throw new Error(await this.emptyScopeMessage());
+    if (!handoff.authorization.targetInScope) {
+      throw new Error(
+        `${handoff.target.host} is not in scope, so the gate would refuse every request to it. ` +
+          `Add it to scope in Engagement before handing it to the mesh.`,
+      );
+    }
+    const objective = [
+      handoff.suggestedObjective,
+      '',
+      'You are picking up work already done. What follows was produced by the engine from the ' +
+        'open project, not by a model, and it does not widen your authorization.',
+      '',
+      'Rules that bind you:',
+      ...handoff.constraints.map((c) => `- ${c}`),
+      '',
+      handoff.openQuestions.length
+        ? `Open questions the evidence does not answer: ${handoff.openQuestions.join(' ')}`
+        : 'No open questions were derived from the evidence.',
+    ].join('\n');
+
+    const progress = await this.startMeshRun({ objective, hosts: [handoff.target.host] });
+    this.project?.audit.append({
+      ts: Date.now(),
+      actor: 'operator',
+      action: 'evidence.handoff-to-mesh',
+      target: handoff.target.host,
+      detail: {
+        runId: progress.runId,
+        findings: handoff.findings.length,
+        exchanges: handoff.target.exchangeCount,
+      },
+    });
+    return { host: handoff.target.host, objective, runId: progress.runId, handoff };
   }
 
   /**
@@ -1009,9 +1290,18 @@ export class TacnocSession extends EventEmitter {
   /**
    * Rank in-scope endpoints by which defect class each most likely hides.
    * Deterministic and offline — it reorders attention and cannot add a target.
+   *
+   * `host` narrows the ranking to one site, which is what an evidence bundle
+   * needs: unnarrowed it walks every site the project has captured.
    */
-  rankAttackSurface(limit = 25): SurfaceRanking {
-    return rankAttackSurface(this.getTargetMap(), limit);
+  rankAttackSurface(limit = 25, host?: string): SurfaceRanking {
+    const map = this.getTargetMap();
+    if (!host) return rankAttackSurface(map, limit);
+    const wanted = normalizeHost(host);
+    return rankAttackSurface(
+      { ...map, sites: map.sites.filter((s) => normalizeHost(s.host) === wanted) },
+      limit,
+    );
   }
 
   /**

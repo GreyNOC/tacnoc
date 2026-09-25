@@ -91,21 +91,45 @@ every unit/dev-E2E test stays green. Do not cut a release without this passing.
 a decision for the operator:
 
 - **Windows:** set an Authenticode certificate (`CSC_LINK` / `CSC_KEY_PASSWORD`).
-- **macOS:** set a Developer ID identity and enable `hardenedRuntime` +
-  notarization.
+- **macOS:** set a Developer ID Application **certificate** — that is what
+  signs — and, separately, notarization credentials; then enable
+  `hardenedRuntime` + `notarize`.
 - **Linux:** AppImage/tar.gz are typically distributed with detached checksums.
+
+### Signing and notarization are not the same credential (macOS)
+
+Worth stating plainly, because the workflow got this wrong from the moment CI
+signing was first documented:
+
+- The **certificate** (`CSC_LINK` + `CSC_KEY_PASSWORD`, a base64 Developer ID
+  Application .p12) is the only thing that produces a **signature**.
+  electron-builder imports it into a throwaway keychain by itself, so no
+  `security import` step is needed.
+- The **`APPLE_*` trio** is read only by `notarytool`, which runs *after* a
+  signature exists.
+
+`MacPackager.sign()` returns early when it finds no identity, and the
+notarization call sits after that return. So configuring **only** the `APPLE_*`
+secrets does not fail loudly — it produces an **unsigned, un-notarized artifact
+with no error at all**, and the notarization credentials are never read. The
+workflow now gates macOS on the certificate and warns when the `APPLE_*` values
+are set without one.
 
 ### CI signing activation
 
 `release.yml` passes signing secrets to `electron-builder` as env vars. Signing
-activates **automatically and only** when the matching secrets are set in the
-repository; with none set, artifacts are UNSIGNED (the build does not fail) and a
-`::warning::` is emitted. Configure:
+activates **automatically and only** when the matching **certificate** secret is
+set in the repository; with none set, artifacts are UNSIGNED (the build does not
+fail) and a `::warning::` is emitted. Configure:
 
 | Purpose | Repository secrets |
 |---|---|
-| Windows Authenticode | `WINDOWS_CSC_LINK` (base64 .pfx), `WINDOWS_CSC_KEY_PASSWORD` |
-| macOS Developer ID + notarization | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` |
+| Windows Authenticode (signs) | `WINDOWS_CSC_LINK` (base64 .pfx), `WINDOWS_CSC_KEY_PASSWORD` |
+| macOS Developer ID (signs) | `APPLE_CSC_LINK` (base64 .p12), `APPLE_CSC_KEY_PASSWORD` |
+| macOS notarization (needs the above) | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` |
+
+The three notarization secrets are all-or-nothing: set partially, the macOS leg
+fails fast with an `::error::` rather than after a full sign-and-package.
 
 For macOS notarization also enable `mac.hardenedRuntime` and `mac.notarize` in
 `electron-builder.yml` (left off by default so unsigned/dev builds don't fail).
@@ -138,6 +162,242 @@ tag existed.
 The entries are left in place rather than rewritten, with this correction above
 them, because the point of this file is an accurate record and quietly editing
 the history would defeat it.
+
+### Tag record — second correction (2026-09-15)
+
+The 2026-09-03 correction above was itself incomplete, and the release it
+described did not happen:
+
+- **`v0.5.3` never produced artifacts.** The `release.yml` run on that tag
+  failed its quality-gate step on `macos-latest`: `huntFolderLayout.test.ts`
+  compared a `/private/var/…` path the engine had resolved through `fs.realpath`
+  against the `/var/…` spelling `os.tmpdir()` returns, and only macOS puts a
+  symlink between the two. Fail-fast cancelled the Windows and Linux legs and
+  `draft-release` never ran. The local artifacts and hashes in the v0.5.3 record
+  are real, the tag exists, and nothing was ever attached to a release. The tag
+  is left where it is because it was published.
+- **`v0.5.3` was tagged off `master`.** The tag and its record sat on
+  `claude/ca-setup-guide-qaqc`, two commits ahead of a `master` that stayed at
+  0.5.2 — a version that was itself never tagged. The branch fast-forwarded onto
+  `master`; nothing had diverged.
+- **Six tags existed only in this workstation's clone.** `v0.1.0`, `v0.2.0`,
+  `v0.4.2`, `v0.4.3`, `v0.5.0` and `v0.5.1` were created here — annotated tags
+  dated July and August — and never pushed;
+  the 2026-09-03 correction was written from a checkout that did not have them.
+  They are pushed after the v0.5.4 run completes, and each push triggers
+  `release.yml` against a commit that cannot pass it — v0.4.2 through v0.5.1
+  predate `.gitattributes` and die on Windows `format:check`, all six predate
+  the macOS fix, and v0.1.0/v0.2.0 are older still — so expect a failed Release
+  run on every one of those tags. They are the record, not releases. `v0.5.2` is
+  tagged retroactively at `3599afa`, the `master` commit whose `package.json`
+  says 0.5.2, on the same reasoning.
+
+### v0.5.4 — cut UNSIGNED, built by CI (operator decision, 2026-09-15)
+
+`v0.5.4` is the v0.5.3 work plus the fixes that let it actually build, cut from
+`master` and tagged on the merge commit — the "re-tag on the merge commit" the
+v0.5.3 record asks for, done as a new version rather than by moving a published
+tag. No shipped behaviour differs from what v0.5.3 would have built (see
+`CHANGELOG.md`).
+
+Gate, run on this workstation before tagging: `npm run ci` green (format, lint,
+typecheck, 28 test files / 368 tests). Full-tree `npm audit` reports **0
+vulnerabilities at every level** after two lockfile-only bumps — `js-yaml`
+4.3.1 → 4.3.2 (high, GHSA-2883-xcg3-v3hh; reached only through
+`electron-builder` and `eslint`) and `vitest`/`@vitest/coverage-v8` 4.1.10 →
+4.1.11 (moderate, GHSA-82fw-gwwq-j7x9; the test runner) — neither is in the
+shipped runtime, whose ten SBOM components are unchanged; `sbom.json`
+regenerated. `npm run test:e2e` on this workstation: all 10 specs green in the
+real Electron runtime, including `hunt-folder.spec.ts` as changed. Note that
+`packaged.spec.ts` ran here against the `dist/` already on disk — the v0.5.2
+local build; nothing was packaged for 0.5.4 on this host — so the packaged-path
+check against the 0.5.4 binaries is the one the release matrix performs.
+
+The macOS failure could not be reproduced here. Windows needs Developer Mode to
+create a directory symlink (`EPERM` without it), and a directory junction is not
+resolved by Node's `fs.realpath`, so the string split that fails on macOS cannot
+be manufactured on this host. The fix is verified by the `macos-latest` leg of
+the release run below — the only place the defect ever showed.
+
+**This release produced no artifacts.** The tagged `release.yml` run
+(`35010044815`) failed. The macOS fix worked — the quality gate passed on
+`macos-latest` for the first time, which is precisely what had failed on v0.5.3
+— and the leg then failed one step later, at packaging, on a defect in the
+workflow that no cut had ever reached:
+
+```
+• empty password will be used for code signing  reason=CSC_KEY_PASSWORD is not defined
+⨯ /Users/runner/work/tacnoc/tacnoc not a file
+```
+
+`CSC_LINK` (Windows Authenticode) was set from a matrix-wide `env:` block on all
+three runners. An unset GitHub secret substitutes the **empty string**, not
+nothing, and electron-builder takes `CSC_LINK` as a path to a certificate:
+`""` resolved against the working directory is the project root, which is not a
+file. `fail-fast` then cancelled Windows and Linux — Linux was mid-build with
+`TACNOC-0.5.4-linux-x86_64.AppImage` and `TACNOC-0.5.4-linux-x64.tar.gz` already
+building, so nothing here indicates a problem on either. Fixed in v0.5.5; the
+`v0.5.4` tag stays where it is, and marks a second version with no artifacts.
+
+### v0.5.5 — cut UNSIGNED, built by CI (operator decision, 2026-09-15)
+
+`v0.5.5` is v0.5.4 plus the `release.yml` fixes that let the matrix package: the
+signing variables are exported per-OS in the shell rather than in `env:` (so an
+empty one is never seen by a runner that has no such secret), macOS identity
+auto-discovery is disabled explicitly when no Apple ID is configured, the build
+passes `--publish never` so electron-builder stops racing `draft-release` for
+the same release, and `fail-fast` is off so one leg cannot cancel the others.
+No application code changed.
+
+Gate on this workstation: `npm run ci` green, `npm run test:e2e` 10/10 in the
+real Electron runtime, full-tree `npm audit` 0 at every level, SBOM regenerated.
+The macOS packaging path cannot be exercised here at all — this is a Windows
+host — so, as with the v0.5.4 test fix, the `macos-latest` leg of the release
+run is the verification.
+
+**The macOS fix worked. This release still produced no artifacts.** Run
+`35020717338`: `macos-latest` **passed** in 3m15s and `ubuntu-latest` **passed**
+in 6m21s — both built, verified the packaged binary, checksummed and uploaded —
+and `windows-latest` failed at the quality gate, so `draft-release` (which
+needs every leg) did not run. `fail-fast: false` is what made that legible:
+under the old setting the first failure would have cancelled the two green legs
+and the run would have said nothing about either.
+
+The Windows failure was `storage.test.ts` spending 86,034 ms against a 20,000 ms
+timeout on 2050 row-at-a-time inserts — synchronous, so the timeout could not
+fire until they finished. Fixed in v0.5.6, along with the reason it reached a
+tag at all: `ci.yml` ran the gate only on `ubuntu-latest`. The `v0.5.5` tag
+stays where it is, and marks a third version with no artifacts.
+
+### v0.5.6 — cut UNSIGNED, built by CI (operator decision, 2026-09-15)
+
+`v0.5.6` is v0.5.5 plus a bulk-insert path (`HistoryRepo.insertMany`, one
+transaction instead of 2050 durable commits) and a `ci.yml` that runs the gate
+on all three platforms `release.yml` builds for, so the next platform-specific
+defect is caught in a pull request rather than on a tag. No application
+behaviour changed.
+
+Gate on this workstation: `npm run ci` green, `npm run test:e2e` 10/10 in the
+real Electron runtime, full-tree `npm audit` 0 at every level, SBOM regenerated.
+The previously-failing test measured **86,034 ms on CI Windows → 249 ms here**
+after batching.
+
+**That fix worked, and this release still produced no artifacts.** Run
+`35022131106`: Windows failed the quality gate again, on a different test —
+`ca.test.ts`'s real-TLS-handshake case — and intermittently, since the same
+commit's PR run had passed on `windows-latest` minutes earlier. Reproduced
+locally at roughly 1 run in 25. Fixed in v0.5.7. The `v0.5.6` tag stays where it
+is, and marks a fourth version with no artifacts.
+
+### v0.5.7 — cut UNSIGNED, built by CI (operator decision, 2026-09-15)
+
+`v0.5.7` moves that handshake off loopback TCP and onto a named pipe (Unix
+socket off Windows), removing the ephemeral-port churn the test was
+inadvertently exercising. Same certificates, same SNI, same verification — no
+port to recycle. No application code changed.
+
+Evidence, gathered before changing anything rather than after: 199 of 200
+handshakes verified over TCP (the one failure a socket disconnect, chain
+intact); 60 of 60 with freshly minted CAs in isolation; and a direct check
+refuting port hijacking, since Windows returns `EADDRINUSE` for a second bind
+with or without `exclusive: true`. After the change, 60 consecutive runs passed.
+At the observed TCP failure rate a clean run of 60 would happen by chance about
+9% of the time, so the mechanism — no port, no `TIME_WAIT` — is the argument,
+and the 60 runs are corroboration rather than proof.
+
+Gate on this workstation: `npm run ci` green, `npm run test:e2e` 10/10 in the
+real Electron runtime, full-tree `npm audit` 0 at every level, SBOM regenerated.
+
+**The flake fix worked. Windows and Linux both passed — and macOS found a real
+bug.** Run `35024875199`: `windows-latest` passed in 5m18s (the TLS handshake
+case included) and `ubuntu-latest` in 5m54s, both building and verifying their
+artifacts; `macos-latest` failed the quality gate on the same handshake test,
+but for an entirely different reason — `tls.createSecureContext` rejecting a
+minted leaf with `asn1 encoding routines::illegal padding`. That is not a test
+problem. It is an interception defect that hit about 1 host in 512, fixed in
+v0.5.8. The `v0.5.7` tag stays where it is, and marks a fifth version with no
+artifacts.
+
+Worth stating plainly, because it is the argument for the whole three-OS gate:
+this bug had been in every release since the CA existed, it is invisible on
+Windows and Linux most of the time, and it took a macOS runner drawing an
+unlucky 16 bytes to expose it.
+
+### v0.6.0 — cut UNSIGNED, built by CI (operator decision, 2026-09-15)
+
+A minor bump rather than a patch: `v0.6.0` adds a user-facing feature, the
+guided setup, alongside two evidence-bundle fixes that are the reason v0.5.8 was
+never tagged.
+
+**What the bundle fixes change for anyone who already exported one.** Response
+bodies were UTF-8-decoded while still `Content-Encoding`-compressed, so in
+practice every gzip or br response in a bundle was unrecoverable — under a
+header that said `REDACTED (credentials and secret patterns masked)`, a claim
+nothing could have verified because the redactor could not read the bytes
+either. And a bundle for one target carried the whole project: the engine
+briefing embedded in `HANDOFF.md` ranked every in-scope host, named the
+engagement folder's absolute path and its filenames, and the session log tail
+shipped by default. Both are fixed; the log tail is now opt-in beside raw
+captures. **Re-export any bundle produced before this version, and treat one
+already handed to a third party as having disclosed the other hosts in scope.**
+
+`engagement.json` still carries the full `ScopeConfig` by design — the recipient
+needs to know what the gate permits — so a bundle still names the other in-scope
+hosts there. That is documented rather than fixed, and is an open decision.
+
+**Guided setup** replaces landing a new project on an empty history table:
+intake collects the program, platform and handle; a Setup view renders the same
+`getPreflight()` the mesh gates on, worst-first and wired to what clears each
+item; and a skippable walkthrough covers all seventeen features. The skip is
+per-install and survives a restart.
+
+Two defects were found by adversarial review AFTER the feature passed its own
+tests, and both are worth recording because the tests were green for them. The
+checklist's top blocker — "the proxy is bound to a non-loopback address" — was
+given a button labelled "Start the proxy", which is a no-op, because prefix
+routing matched `proxy-bind` to the wrong destination and the drift guard only
+asserted that *a* route existed. And a failed preferences write was swallowed,
+so on a read-only `userData` the walkthrough's skip reported success and came
+back on the next launch. Both fixed, both now driven in the running app.
+
+Gate on this workstation: `npm run ci` green (32 files / 427 tests),
+`npm run test:e2e` 13/13 in the real Electron runtime, full-tree `npm audit` 0 at
+every level, SBOM regenerated. The run, the artifacts and their SHA-256
+manifests are recorded below once it completes.
+
+### v0.5.8 — cut UNSIGNED, built by CI (operator decision, 2026-09-15)
+
+`v0.5.8` fixes the certificate serial-number encoding. See `CHANGELOG.md`; the
+short version is that serials were `'00' + 15 random bytes`, which is positive
+but not always *minimally* encoded, and OpenSSL 3 refuses a non-minimal INTEGER.
+Measured: 9 certificates rejected out of 6000 with the old generator, 0 out of
+6000 with the new one. Two deterministic regression tests cover it — the
+round-trip one fails on the first leaf under the old generator, which was
+verified by reverting the fix and re-running rather than assumed.
+
+This is the first change in the v0.5.3–0.5.8 sequence that alters shipped
+behaviour: certificates minted after it will differ from ones minted before, and
+an operator who happened to hit the bad path will find interception working for
+a host that previously failed. No CA needs reissuing — an existing CA that works
+is unaffected — but a CA that was *never* usable should be reissued.
+
+`v0.5.8` also carries a `release.yml` signing fix that never reached a tag under
+its own version. The macOS leg gated code signing on `APPLE_ID`, which is a
+**notarization** credential — the certificate is what signs, and the only
+certificate secret in the workflow was Windows-specific, so the advertised
+"macOS Developer ID + notarization" configuration could not be satisfied by any
+combination of secrets. Worse, it failed silently: `MacPackager.sign()` returns
+before `notarizeIfProvided`, so setting all three `APPLE_*` secrets produced an
+unsigned, un-notarized artifact and exit 0. macOS now gates on
+`APPLE_CSC_LINK` / `APPLE_CSC_KEY_PASSWORD` exactly as Windows gates on
+`WINDOWS_CSC_LINK`. This changes nothing about **this** cut — it is still
+UNSIGNED, by the same operator decision — but the path is now correct for the
+first cut that configures a certificate.
+
+Gate on this workstation: `npm run ci` green, `npm run test:e2e` 10/10 in the
+real Electron runtime, full-tree `npm audit` 0 at every level, SBOM regenerated.
+The run, the artifacts, and their SHA-256 manifests are recorded below once it
+completes.
 
 ### v0.5.3 — cut UNSIGNED (operator decision, 2026-09-03)
 

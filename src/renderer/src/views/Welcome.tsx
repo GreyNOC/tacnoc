@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.js';
+import { OwlMark } from '../components/OwlMark.js';
 
 export function Welcome(): JSX.Element {
   const s = useStore();
   const [name, setName] = useState('Engagement');
   const [authRef, setAuthRef] = useState('');
+  const [program, setProgram] = useState('');
+  const [platform, setPlatform] = useState('');
+  const [handle, setHandle] = useState('');
   const [dir, setDir] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,11 +44,36 @@ export function Welcome(): JSX.Element {
           `${k.scope} scope, ${k.engagement} engagement, ${k.report} report, ${k.recon} recon. ` +
           'Check Engagement → Proposed scope before testing anything.',
       );
+      await applyIntake();
       s.setProject(res.info);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  /**
+   * Fold the intake answers into the engagement profile.
+   *
+   * Runs after the project exists, because the profile is stored in it. Best
+   * effort on purpose: the project is already created and open by this point, so
+   * a profile write that fails must not read as "creating the project failed" —
+   * the fields are all editable in Engagement.
+   */
+  const applyIntake = async (): Promise<void> => {
+    if (!program.trim() && !platform.trim() && !handle.trim() && !authRef.trim()) return;
+    try {
+      const current = await api.getEngagementProfile();
+      await api.setEngagementProfile({
+        ...current,
+        program: program.trim() || current.program,
+        platform: platform.trim() || current.platform,
+        handle: handle.trim() || current.handle,
+        authorizationRef: authRef.trim() || current.authorizationRef,
+      });
+    } catch {
+      /* editable in Engagement; never fail the open over it */
     }
   };
 
@@ -62,6 +91,7 @@ export function Welcome(): JSX.Element {
     setError(null);
     try {
       const info = await api.createProject(dir, name.trim(), authRef.trim() || undefined);
+      await applyIntake();
       s.setProject(info);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
@@ -103,7 +133,10 @@ export function Welcome(): JSX.Element {
   return (
     <div className="welcome">
       <div className="card">
-        <h2 style={{ marginTop: 0 }}>TACNOC</h2>
+        <div className="brand-hero">
+          <OwlMark className="brand-hero-mark" title="GreyNOC" />
+          <h2>TACNOC</h2>
+        </div>
         <p className="hint">
           An extensible web-application security research suite for{' '}
           <strong>authorized testing</strong>. The proxy binds to 127.0.0.1, and nothing leaves the
@@ -124,6 +157,40 @@ export function Welcome(): JSX.Element {
             onChange={(e) => setAuthRef(e.target.value)}
           />
         </div>
+        <div className="row">
+          <div className="form-row grow">
+            <label htmlFor="pprogram">Program</label>
+            <input
+              id="pprogram"
+              placeholder="e.g. Acme Public Bounty"
+              value={program}
+              onChange={(e) => setProgram(e.target.value)}
+            />
+          </div>
+          <div className="form-row grow">
+            <label htmlFor="pplatform">Platform</label>
+            <input
+              id="pplatform"
+              placeholder="e.g. hackerone"
+              value={platform}
+              onChange={(e) => setPlatform(e.target.value)}
+            />
+          </div>
+          <div className="form-row grow">
+            <label htmlFor="phandle">Your handle</label>
+            <input
+              id="phandle"
+              placeholder="researcher handle"
+              value={handle}
+              onChange={(e) => setHandle(e.target.value)}
+            />
+          </div>
+        </div>
+        <p className="hint" style={{ marginTop: 0 }}>
+          These three go on the report and are what preflight checks you against. All of them stay
+          editable in Engagement.
+        </p>
+
         <div className="form-row">
           <label>Location</label>
           <div className="row">

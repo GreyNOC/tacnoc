@@ -18,21 +18,15 @@ import { SequencerView } from './views/SequencerView.js';
 import { AiMeshView } from './views/AiMeshView.js';
 import { EngagementView } from './views/EngagementView.js';
 import { api } from './api.js';
-
-function Logo(): JSX.Element {
-  return (
-    <svg className="logo" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M12 2 3 6.5V12c0 5 3.8 8.4 9 10 5.2-1.6 9-5 9-10V6.5L12 2Z"
-        stroke="var(--accent)"
-        strokeWidth="1.6"
-      />
-      <path d="M8 12h8M12 8v8" stroke="var(--accent)" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  );
-}
+import { OwlMark } from './components/OwlMark.js';
+import { SetupView } from './views/SetupView.js';
+import { Tour } from './guide/Tour.js';
 
 const NAV: { group: string; items: { id: ViewId; label: string }[] }[] = [
+  {
+    group: 'Start here',
+    items: [{ id: 'setup', label: 'Setup' }],
+  },
   {
     group: 'Traffic',
     items: [
@@ -177,7 +171,7 @@ function TopBar(): JSX.Element {
   return (
     <div className="topbar drag">
       <div className="brand">
-        <Logo />
+        <OwlMark className="logo" />
         <span>TACNOC</span>
         <small>authorized testing</small>
       </div>
@@ -258,6 +252,8 @@ function Sidebar(): JSX.Element {
 function ActiveView(): JSX.Element {
   const { view } = useStore();
   switch (view) {
+    case 'setup':
+      return <SetupView />;
     case 'target':
       return <TargetView />;
     case 'history':
@@ -328,7 +324,10 @@ export function App(): JSX.Element {
     );
   }
   return (
-    <div className="app">
+    // `tour-open` reserves room at the bottom of the scroll area: the
+    // walkthrough is docked rather than modal, and without this it sits on top
+    // of the last item of a long view with no way to scroll past it.
+    <div className={`app ${s.tourActive ? 'tour-open' : ''}`}>
       <TopBar />
       <div className="body">
         <Sidebar />
@@ -336,6 +335,7 @@ export function App(): JSX.Element {
           <ActiveView />
         </main>
       </div>
+      <Tour />
       <Toast />
     </div>
   );

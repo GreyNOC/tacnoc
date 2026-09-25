@@ -65,6 +65,324 @@ semantics, rule ordering, exclude-before-include precedence, and the `*.x` →
 `**.x` translation are all untouched, and a fix that would have traded a hang
 for a wider gate was rejected on those grounds.
 
+## [0.6.0] — 2026-09-15
+
+### Added — guided setup: intake, a readiness checklist, and a skippable walkthrough
+
+Opening TACNOC for the first time used to drop you on an empty HTTP History
+table with no indication that nothing would work until scope and a CA existed.
+Three pieces now sit between "installed" and "testing".
+
+- **Intake** asks for the program, the platform and your handle alongside the
+  project name and authorization reference, and folds them into the engagement
+  profile as soon as the project exists. Best effort by design: the project is
+  already open by then, so a profile write that fails must not read as a failed
+  project creation. Every field stays editable in Engagement.
+- **Setup is the new landing view**, and it renders `getPreflight()` — the same
+  report the AI mesh refuses to run against — worst-first, with each item wired
+  to the thing that clears it. It is deliberately not a second opinion about
+  readiness: if Setup is green, the engine agrees. A test asserts that every
+  check id `preflight.ts` can emit has somewhere to route, because a "Fix this"
+  button that goes nowhere fails silently.
+- **A walkthrough covers all seventeen features**, moving the app to each view as
+  it describes it rather than talking about them in the abstract. It is docked,
+  never modal, so you can keep clicking while it is open, and **Skip is on every
+  step** (Escape does the same). Skipping returns you to the view you were on
+  rather than stranding you where the tour navigated. Replay it any time from
+  Settings.
+
+Skipping sticks. The preference is per-install rather than per-project — having
+skipped it once, you should not meet it again on the next engagement — so it
+lives in `userData`, is written atomically, and repairs rather than rejects a
+corrupt file. An end-to-end test relaunches the app against the same profile to
+prove the skip survived the round trip, which is the only thing that actually
+demonstrates "skippable".
+
+### Fixed — IPC dispatch resolved inherited `Object.prototype` keys
+
+The handler map is an object literal, so `constructor` and `toString` reached
+dispatch from the renderer despite not being on the allowlist. Now an
+`Object.hasOwn` check.
+
+This was closer than it looks. `handlers['constructor']` is `Object`, which **is
+callable**: the old dispatch invoked it as `Object(session, getWindow, args)`,
+and `Object(x)` returns `x` — the live session object — which then had only
+Electron's structured clone between it and the renderer. `toString` likewise
+resolved and returned a string instead of the "unknown method" it should have.
+Worth stating plainly because the first draft of this note claimed neither value
+was callable, which is wrong.
+
+Note that `src/preload/index.ts` forwards any method string: `INVOKE_METHODS` is
+an allowlist enforced at dispatch plus a startup parity assert, not a gate at the
+bridge.
+
+### Fixed — response bodies in an evidence bundle were unreadable, and the file said otherwise
+
+Nearly every HTTPS response is gzip or brotli on the wire, and the proxy stores
+what the wire carried. The bundle UTF-8-decoded those bytes, which destroys
+them: the response bodies — the substance of the evidence — reached a triager as
+mojibake, and the original was not recoverable from the file.
+
+The label above them was worse than the damage. A redacted bundle printed
+`# content: REDACTED (credentials and secret patterns masked)` over bytes the
+redactor had never been able to read, because it cannot match a pattern in
+compressed data. The claim was unverifiable rather than merely wrong. A raw
+bundle printed `RAW as captured` over the same lossy decode.
+
+Bodies are now decompressed first, through the same `maxOutputLength`-guarded
+helper the redactor and the passive scanner already used — one decompressor, so
+there is one place to keep the bomb guard. The `# content:` line says per body
+what happened to it, and a body that cannot be decompressed is named as such
+instead of being emitted as noise: on the redacted path it is omitted outright,
+since unreadable is unredactable and a bundle that says `REDACTED` must not
+carry bytes nothing inspected. Raw bodies are written byte for byte rather than
+through a string, and the documented 256 KiB per-body cap now binds on the raw
+path too — it applied only to the redacted one, so a raw bundle carried up to
+4 MiB per message.
+
+### Fixed — a bundle for one target carried the whole project
+
+`bundle.ts` opens by saying why exact host matching is load-bearing: anything
+looser "would hand a triager another target's traffic." Exchanges, findings and
+audit rows honoured it. Two sections never had.
+
+The **engine briefing** was rendered verbatim into `HANDOFF.md` and
+`handoff.json`, and it is built from the whole project: every in-scope endpoint
+the proxy has ranked, the absolute path of the engagement folder, and up to
+twenty of its filenames — which in practice are named after the client. Export a
+bundle for host A with host B in the same project, and B's endpoints and the
+folder's name went with it. The briefing is now asked for **by host**: it ranks
+only that host's endpoints, drops the engagement folder entirely, and drops
+per-check preflight detail, where the local CA's subject and fingerprint live.
+The full briefing is unchanged for the live UI and the mesh, neither of which
+leaves the machine.
+
+The **session log tail** shipped by default with no host filter at all, and the
+proxy logs a line per host it touches. It is now an opt-in the operator makes
+deliberately, alongside raw captures, with a checkbox in the target view.
+Filtering it was the alternative and is the wrong one: many records carry no
+host, others name one only inside free text, and deciding by substring is
+exactly what rule 3 exists to forbid — a filtered tail would also present itself
+as a whole log.
+
+### Fixed — the log tail outlived the project it described
+
+`LogBuffer` is built once per session and the session outlives every project
+opened in it, so nothing ever cleared it. Work on one engagement, open the next,
+export: up to 5000 of the previous client's records went out inside the new
+project's bundle or diagnostics. `closeProject()` now clears the tail, which
+covers opening and creating a project alike, since both close first.
+
+The test that should have caught the briefing leak was structurally unable to:
+its fixtures returned a one-line briefing and a one-line log that could not
+mention the impostor host, so the assertion guarding against exactly this passed
+by never being exercised. Both fixtures now carry the impostor.
+
+## [0.5.8] — 2026-09-15
+
+### Added — the GreyNOC owl is the application's mark
+
+The owl replaces the placeholder shield in the top bar, leads the welcome card,
+and is the application icon the installers carry. One source of truth —
+`src/renderer/public/owl.svg` — and `npm run brand` regenerates both the React
+component and the icons from it, so the mark and the icon cannot drift apart.
+
+- **In the UI the owl is an inline SVG**, not an image: it takes its colour from
+  `currentColor`, so it follows the accent on the dark and the light theme
+  alike, and it asks nothing of `img-src` under the renderer's strict CSP.
+- **The icon is the owl on the app's own `--bg` surface** (`#0d1117`), matching
+  the badge form. `build/icon.png` is 1024x1024 and electron-builder derives the
+  per-platform `.ico` / `.icns`; a 256px copy ships in the renderer for the
+  `BrowserWindow` icon, which is what Linux and `electron-vite dev` read.
+- The top-bar mark is 22px rather than the placeholder's 20px — the owl carries
+  fine feather detail that turns to mush below about that size.
+
+### Fixed — about 1 host in 512 could not be intercepted at all
+
+A real interception defect, surfaced by a release run rather than by use, which
+is the only reason it was ever found: it fails intermittently and blames ASN.1.
+
+Certificate serial numbers were minted as `'00' + 15 random bytes`. That makes
+the integer positive, which was the intent — but DER also requires an INTEGER to
+be **minimally encoded**, with no redundant leading zero byte. node-forge strips
+exactly one leading zero when it writes the DER, so whenever the first random
+byte was *also* `0x00` and the next had its high bit clear, the encoding kept a
+redundant zero.
+
+OpenSSL 3 refuses such a certificate outright, from `tls.createSecureContext` —
+the call that turns every minted leaf into a usable context:
+
+```
+error:068000DD:asn1 encoding routines::illegal padding
+```
+
+So roughly **1 leaf in 512** threw instead of producing a context, and HTTPS
+interception for that host simply failed, with an ASN.1 error and nothing
+pointing at the cause. A newly issued CA was unusable at the same rate. Measured
+directly: **9 rejected out of 6000** with the old generator, **0 out of 6000**
+with the new one.
+
+The first byte is now forced into `0x01..0x7f` — positive, non-zero and minimal
+by construction, with no leading zero to strip — keeping 127 bits of entropy,
+well above the 64-bit CA/Browser Forum floor.
+
+Two regression tests, both deterministic rather than probabilistic: one asserts
+every minted serial survives a DER round trip at full length (the old generator
+fails it on the first leaf), and one pins the mechanism by building certificates
+with a known-bad and known-good serial and asserting OpenSSL's verdict on each.
+
+### Fixed — the macOS "signing" secrets never signed anything
+
+`release.yml` treated `APPLE_ID` as evidence that a macOS signing identity
+existed. It is not one. On macOS the **certificate** and the **notarization
+credentials** are separate, and only the certificate produces a signature:
+electron-builder reads a Developer ID Application .p12 from `CSC_LINK` (importing
+it into a throwaway keychain of its own), while the `APPLE_*` trio is read only
+by `notarytool`, after a signature exists. The workflow's one certificate secret
+was `WINDOWS_CSC_LINK` — Windows-specific — so the `macos-latest` leg had no way
+to obtain a certificate at all, and RELEASE.md advertised a
+"macOS Developer ID + notarization" row that could not be satisfied.
+
+The failure was silent, which is the worst part. `MacPackager.sign()` returns
+early when no identity is found and the notarization call sits *after* that
+return, so an operator who configured all three advertised `APPLE_*` secrets got
+an **unsigned, un-notarized artifact and no error** — and, because `APPLE_ID` was
+set, the old guard also left `CSC_IDENTITY_AUTO_DISCOVERY` on, so the build
+searched an empty runner keychain instead of saying it had nothing to sign with.
+
+- **`APPLE_CSC_LINK` / `APPLE_CSC_KEY_PASSWORD`** carry the Developer ID
+  certificate, and the macOS branch now gates on it exactly as Windows gates on
+  `WINDOWS_CSC_LINK`. No `security import` step is needed — electron-builder
+  imports a base64 .p12 itself.
+- **`APPLE_*` set without a certificate now warns** that notarization is being
+  skipped entirely rather than silently producing an unsigned build, and a
+  partly-configured notarization trio fails fast with an `::error::` instead of
+  dying after a full sign-and-package.
+- **`Report signing status` reports per-OS on the certificate.** It tested the
+  union of every secret, so any one platform being configured made all three
+  runners claim "artifacts should be signed" — including macOS, where `APPLE_ID`
+  alone signs nothing. It also no longer interpolates secrets into a script body.
+
+## [0.5.7] — 2026-09-15
+
+### Fixed — a TLS test that was really testing the OS port pool
+
+v0.5.6 got the gate running on Windows and macOS, and the very next release run
+failed on Windows again — on a different test, and this time an intermittent
+one. `ca.test.ts` mints a leaf from the project CA and verifies it over a real
+TLS handshake across loopback TCP, and roughly **1 run in 25** failed with a
+transient socket error: either `unable to verify the first certificate` or the
+client socket disconnecting mid-handshake.
+
+The certificates were never the problem. Two probes established that before
+anything was changed: 199 of 200 handshakes verified (the single failure being
+a socket disconnect, with the chain intact), and 60 of 60 verified against
+freshly minted CAs in isolation. A separate check refuted the obvious
+explanation — Windows refuses a second bind to the same loopback port with
+`EADDRINUSE`, with or without `exclusive: true` — so this was ephemeral-port
+churn, not port hijacking.
+
+The handshake now runs over a **named pipe** (Windows) or a Unix socket, which
+has no port to recycle and nothing in `TIME_WAIT`. It is the same real
+handshake: same certificates, same SNI, same verification against the CA. Over
+60 consecutive runs it did not fail once.
+
+## [0.5.6] — 2026-09-15
+
+### Fixed — the gate never ran on the platforms the release builds for
+
+v0.5.5 fixed macOS packaging and both macOS and Linux went green, producing
+artifacts for the first time. Windows then failed — at the quality gate, on a
+test that passes everywhere else.
+
+- **A bulk insert took 86 seconds on a Windows runner.** `storage.test.ts`
+  builds 2050 exchanges to prove `export()` pages past its 2000-row page size,
+  one `insert` at a time. Each insert is its own durable commit — WAL is
+  unsupported by the WASM VFS, so every row pays a full journal round-trip — and
+  the inserts are *synchronous*, so the 20-second test timeout could not even
+  fire until the block finished: the runner reported 86,034 ms against a 20,000
+  ms limit. `HistoryRepo.insertMany` now wraps a batch in one transaction, which
+  is the right shape for a bulk load and wrong for captured traffic (which keeps
+  committing per request, on purpose). The test: **86,034 ms → 249 ms.**
+
+### Changed
+
+- **`ci.yml` runs the gate on Windows and macOS too**, matching the platforms
+  `release.yml` builds on. It ran only on `ubuntu-latest`, and the release
+  workflow runs it on all three — so the first time the gate ever saw the other
+  two was on a pushed tag. That gap cost two releases in a row: v0.5.3 died on a
+  macOS-only path comparison, v0.5.5 on this Windows-only timeout, and a PR run
+  on those platforms would have caught both for a few minutes of CI. Building
+  and driving the GUI stays Linux-only in its own job — it needs xvfb, and the
+  CSP/renderer regressions it catches are not platform-specific; the packaged
+  binary is still exercised per-OS by `release.yml`.
+
+## [0.5.5] — 2026-09-15
+
+### Fixed — the release workflow could not sign, so it could not build
+
+v0.5.4 fixed the macOS *quality gate* and the macOS leg went straight on to fail
+at **packaging** — a step no cut had ever reached, because the gate had always
+died first. Two defects in `release.yml`, both invisible until something got
+that far:
+
+- **A Windows Authenticode variable was handed to every runner.** `CSC_LINK` was
+  set from `secrets.WINDOWS_CSC_LINK` in a matrix-wide `env:` block. A GitHub
+  expression that evaluates to nothing sets the variable to the **empty string**,
+  and an empty `CSC_LINK` is not the same as an unset one: electron-builder reads
+  it as a path to a certificate, resolves `""` against the working directory, and
+  stops with `⨯ <projectDir> not a file`. Windows tolerated it and macOS did not.
+  The signing variables are now exported per-OS in the shell, so a runner sees a
+  signing variable only when that platform's secret is actually configured, and
+  macOS disables identity auto-discovery explicitly when no Apple ID is set —
+  unsigned by decision rather than by failed search.
+- **electron-builder was publishing on its own.** It warned on every tagged run
+  (`Implicit publishing triggered by git tag`) that it would upload to the
+  release itself, racing the `draft-release` job for the same release. The build
+  now passes `--publish never`; drafting stays the one job that does it.
+
+### Changed
+
+- **`fail-fast` is off for the release matrix.** One runner failing no longer
+  cancels the others. It happened twice — v0.5.3 (macOS gate) and v0.5.4 (macOS
+  packaging) — and both times Windows and Linux were mid-build and producing
+  artifacts when they were cancelled, so neither failure said anything about
+  whether those platforms were healthy. `draft-release` still requires every
+  leg, so a failure blocks the release exactly as before; what changes is that
+  the run now reports on all three.
+
+## [0.5.4] — 2026-09-15
+
+### Fixed — the v0.5.3 release never built
+
+- **The release gate failed on macOS, so no v0.5.3 artifacts were ever
+  produced.** `release.yml` on the `v0.5.3` tag failed its quality-gate step on
+  `macos-latest`, fail-fast cancelled the Windows and Linux legs, and the
+  draft-release job never ran. The failure was in the tests, not the engine:
+  `os.tmpdir()` on macOS is `/var/folders/…`, a symlink to
+  `/private/var/folders/…`, and the engine resolves every workspace path
+  through `fs.realpath` — so `huntFolderLayout.test.ts` compared
+  `/private/var/…` against `/var/…`, two spellings of one directory, and failed
+  on the one OS where they differ. Every test that derives paths from a temp
+  directory now resolves that directory at creation, so the comparison is
+  canonical-to-canonical everywhere. `hunt-folder.spec.ts` (E2E, which the
+  release matrix also runs on macOS) carried the same latent mismatch and is
+  fixed the same way.
+- **v0.5.3 was tagged on a branch that never reached `master`.** The tag and
+  its record sat on `claude/ca-setup-guide-qaqc`; `master` stayed at 0.5.2,
+  itself never tagged. The branch is merged (a fast-forward — nothing diverged)
+  and this version is cut from `master`, so the default branch, the tag, and the
+  record line up again. The `v0.5.3` tag stays where it is — it was published —
+  and marks a version that has no artifacts.
+
+### Changed
+
+- This is the first cut to carry the corrections made after the `v0.5.3` tag:
+  the `SECURITY.md`, `RELEASE.md`, `docs/extension-sdk.md` and `docs/testing.md`
+  claims that did not match the code, the `package-linux.mjs` executable name,
+  and the Mythos thinking/effort coverage note. No shipped behaviour differs
+  from what `v0.5.3` would have built.
+
 ## [0.5.3] — 2026-09-03
 
 ### Added — the certificate step, guided and optional

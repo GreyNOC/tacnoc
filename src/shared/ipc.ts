@@ -87,6 +87,12 @@ export const INVOKE_METHODS = [
   'closeProject',
   'getProjectInfo',
   'exportProjectToFile',
+  // Evidence bundles: one target's traffic, findings and handoff as a ZIP,
+  // plus the diagnostic log tail and the live hand-off to the mesh.
+  'exportTargetEvidence',
+  'exportLogs',
+  'previewTargetHandoff',
+  'handoffTargetToMesh',
   'importProjectFromFile',
   'startProxy',
   'stopProxy',
@@ -112,6 +118,10 @@ export const INVOKE_METHODS = [
   'setScope',
   'getConfig',
   'setConfig',
+  // Guided setup: per-install UI preferences (the walkthrough's state),
+  // deliberately outside the project database — see src/main/uiPrefs.ts.
+  'getUiPrefs',
+  'setUiPrefs',
   'getInterceptState',
   'setInterceptState',
   'listPendingRequests',

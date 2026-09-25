@@ -46,7 +46,7 @@ test('scope rules are saved exactly as the form displays them, and a revoked CA 
   // draft but left the boxes showing what had just been typed, so the NEXT rule
   // was stored with no port, no scheme and no path — strictly WIDER than the
   // rule on screen — in the gate that decides whether a request is authorized.
-  await win.getByRole('button', { name: 'Scope' }).click();
+  await win.getByRole('button', { name: 'Scope', exact: true }).click();
   await win.getByPlaceholder('host e.g. example.test').fill('a.example.test');
   await win.getByPlaceholder('ports (comma) — blank = any').fill('8443');
   await win.getByPlaceholder('path prefix (optional)').fill('/api');

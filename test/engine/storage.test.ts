@@ -283,14 +283,16 @@ describe('at-rest encryption', () => {
       secretStore,
     });
     const N = 2050;
-    for (let i = 0; i < N; i++) {
-      store.history.insert(
+    // One transaction, not 2050. Row-at-a-time here spent 86 seconds of
+    // synchronous journal writes on a CI Windows runner and failed the release.
+    store.history.insertMany(
+      Array.from({ length: N }, (_, i) =>
         sampleExchange({
           id: `ex-${i}`,
           request: { ...sampleExchange().request, body: { size: 0, truncated: false } },
         }),
-      );
-    }
+      ),
+    );
     expect(store.history.count()).toBe(N);
     const exported = await store.export();
     expect(exported.exchanges).toHaveLength(N);

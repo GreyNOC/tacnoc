@@ -198,8 +198,12 @@ label {
   letter-spacing: 0.4px;
 }
 .brand .logo {
-  width: 20px;
-  height: 20px;
+  /* 22px, not the 20px the placeholder mark used: the owl carries fine feather
+     detail that turns to mush below about this size. */
+  width: 22px;
+  height: 22px;
+  color: var(--accent);
+  flex: none;
 }
 .brand small {
   color: var(--text-faint);
@@ -538,6 +542,24 @@ pre.hex {
   width: 480px;
 }
 
+/* The owl leads the welcome card; it takes the accent so the mark reads as
+   brand rather than as another piece of chrome. */
+.brand-hero {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.brand-hero h2 {
+  margin: 0;
+}
+.brand-hero-mark {
+  width: 34px;
+  height: 34px;
+  color: var(--accent);
+  flex: none;
+}
+
 /* Warnings */
 .warn-box {
   background: rgba(242, 181, 68, 0.12);
@@ -714,4 +736,171 @@ small.hint {
   background: var(--bg-elev-2);
   border: 1px solid var(--border);
   font-size: 10px;
+}
+
+/* ---- Guided setup ------------------------------------------------------- */
+
+.setup-scroll {
+  overflow: auto;
+  padding: 12px;
+}
+.setup-banner {
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.setup-banner.ready {
+  border-color: var(--accent);
+  background: rgba(53, 201, 192, 0.1);
+}
+.setup-banner.blocked {
+  border-color: var(--danger);
+  background: rgba(240, 134, 142, 0.1);
+}
+.setup-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.setup-item {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.setup-item.blocker {
+  border-left-color: var(--danger);
+}
+.setup-item.warning {
+  border-left-color: var(--warn);
+}
+.setup-item.ok {
+  border-left-color: var(--accent-dim);
+}
+.setup-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.setup-sev {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  flex: none;
+}
+.setup-sev.blocker {
+  color: var(--danger);
+  background: var(--danger-dim);
+}
+.setup-sev.warning {
+  color: var(--warn);
+  background: rgba(242, 181, 68, 0.15);
+}
+.setup-sev.ok {
+  color: var(--accent);
+  background: rgba(53, 201, 192, 0.12);
+}
+.setup-detail,
+.setup-remedy {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.setup-remedy {
+  color: var(--text);
+}
+.setup-item button {
+  margin-top: 8px;
+}
+
+/* ---- Walkthrough --------------------------------------------------------
+   Docked, never modal: it must not cover the feature it is describing, and the
+   operator has to be able to keep working with it open. */
+
+.tour {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 16px;
+  z-index: 60;
+  width: min(720px, calc(100vw - 32px));
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 16px 16px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  outline: none;
+}
+.tour-mark {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  color: var(--accent);
+  margin-top: 2px;
+}
+.tour-mark svg {
+  width: 100%;
+  height: 100%;
+}
+.tour-text {
+  flex: 1;
+  min-width: 0;
+}
+.tour-meta {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  text-transform: uppercase;
+}
+.tour-title {
+  margin: 2px 0 4px;
+  font-size: 15px;
+}
+.tour-body {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.tour-actions {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-self: stretch;
+  justify-content: center;
+}
+.tour-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  background: var(--border);
+  border-radius: 0 0 var(--radius) var(--radius);
+  overflow: hidden;
+}
+.tour-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+/* The docked walkthrough overlays the scroll area, so give whatever is
+   scrolling room to clear it rather than hiding the last item behind it. */
+.app.tour-open .setup-scroll,
+.app.tour-open .table-wrap,
+.app.tour-open .scrolly,
+.app.tour-open .sidebar {
+  padding-bottom: 160px;
 }

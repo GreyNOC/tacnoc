@@ -18,6 +18,57 @@ export function TargetView(): JSX.Element {
   const [error, setError] = useState<string>();
   const lastLoadedAt = useRef(0);
 
+  const [rawCaptures, setRawCaptures] = useState(false);
+  // The log tail is session-wide, so it names every host the proxy has touched,
+  // not just the one being exported. Same posture as raw captures: off unless
+  // the operator says otherwise.
+  const [sessionLogs, setSessionLogs] = useState(false);
+  const [busy, setBusy] = useState<'export' | 'mesh'>();
+
+  const say = (message: string): void => store.setToast(message);
+  const failed = (what: string, err: unknown): void =>
+    say(`${what}: ${err instanceof Error ? err.message : String(err)}`);
+
+  const exportEvidence = async (): Promise<void> => {
+    if (!selectedSite || busy) return;
+    setBusy('export');
+    try {
+      const res = await api.exportTargetEvidence(selectedSite.host, {
+        includeRawCaptures: rawCaptures,
+        includeLogs: sessionLogs,
+      });
+      // `null` means the save dialog was cancelled. That is not a failure and
+      // must not be reported as one.
+      if (!res) return;
+      say(
+        `Evidence bundle for ${res.host} saved — ${res.exchangeCount} exchange(s), ` +
+          `${res.findingCount} finding(s), ${res.redacted ? 'redacted' : 'RAW CAPTURES'}. ` +
+          `SHA-256 ${res.sha256.slice(0, 16)}…`,
+      );
+    } catch (err) {
+      failed('Could not export the evidence bundle', err);
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const handToMesh = async (): Promise<void> => {
+    if (!selectedSite || busy) return;
+    setBusy('mesh');
+    try {
+      const res = await api.handoffTargetToMesh(selectedSite.host, {
+        includeRawCaptures: rawCaptures,
+      });
+      say(`Handed ${res.host} to the mesh — run ${res.runId}. Follow it in the AI view.`);
+    } catch (err) {
+      // Scope, API key and egress acknowledgement all refuse here, by design.
+      // The message says which; surfacing it verbatim is the whole point.
+      failed('Could not hand this target to the mesh', err);
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
   const load = useCallback(() => {
     lastLoadedAt.current = Date.now();
     void api
@@ -96,7 +147,52 @@ export function TargetView(): JSX.Element {
           />
           in-scope only
         </label>
+
         <span className="spacer" style={{ flex: 1 }} />
+        <label
+          className="hint"
+          title="Bundles are redacted by default. Raw includes live credentials, cookies and PII exactly as captured."
+        >
+          <input
+            type="checkbox"
+            checked={rawCaptures}
+            onChange={(event) => setRawCaptures(event.target.checked)}
+          />
+          raw captures
+        </label>
+        <label
+          className="hint"
+          title="The log tail covers the whole session, not this target — it names every host the proxy has touched since the app started."
+        >
+          <input
+            type="checkbox"
+            checked={sessionLogs}
+            onChange={(event) => setSessionLogs(event.target.checked)}
+          />
+          session logs
+        </label>
+        <button
+          disabled={!selectedSite || busy !== undefined}
+          onClick={() => void exportEvidence()}
+          title={
+            selectedSite
+              ? `Save every exchange, finding and audit row for ${selectedSite.host}, with a handoff brief, as a ZIP.`
+              : 'Select an origin first.'
+          }
+        >
+          {busy === 'export' ? 'Bundling…' : 'Export evidence'}
+        </button>
+        <button
+          disabled={!selectedSite || busy !== undefined}
+          onClick={() => void handToMesh()}
+          title={
+            selectedSite
+              ? `Start a mesh run on ${selectedSite.host} seeded with this target's handoff.`
+              : 'Select an origin first.'
+          }
+        >
+          {busy === 'mesh' ? 'Handing off…' : 'Hand to mesh'}
+        </button>
         <span className="hint">
           {map?.sites.length ?? 0} origins · {endpoints} endpoints · {map?.totalExchanges ?? 0}{' '}
           exchanges

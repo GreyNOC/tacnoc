@@ -6,6 +6,7 @@
 
 import { ipcMain, dialog, BrowserWindow, app } from 'electron';
 import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TacnocSession } from '../engine/session.js';
@@ -20,9 +21,16 @@ import {
 // verbatim copy of the engine's per-platform text, so the two could (and did)
 // drift while both looked authoritative.
 import { caInstallGuide, caInstallInstructions } from '../engine/ca/installInstructions.js';
+import { readUiPreferences, writeUiPreferences } from './uiPrefs.js';
+import { parseUiPreferences } from '../shared/guide.js';
 import { inspectJwt } from '../engine/transforms/codec.js';
 import { diffLines, diffJson, diffBytes } from '../engine/compare/compare.js';
 import { analyzeTokenSamples } from '../engine/analysis/sequencer.js';
+import type {
+  EvidenceBundleOptions,
+  EvidenceBundleSummary,
+  LogExportSummary,
+} from '../shared/evidence.js';
 
 type Handler = (
   session: TacnocSession,
@@ -101,6 +109,83 @@ const handlers: Record<string, Handler> = {
     if (res.canceled || !res.filePath) return null;
     await fs.writeFile(res.filePath, JSON.stringify(data, null, 2));
     return res.filePath;
+  },
+
+  /**
+   * Write one target's evidence bundle.
+   *
+   * The engine builds the archive in memory and this writes it, so the save
+   * dialog stays the only thing that authorizes a path — the same division as
+   * `saveCaCertificate` and `exportProjectToFile`.
+   *
+   * The bundle is redacted unless the caller asked otherwise. When it did, that
+   * choice is audited: a file full of live credentials should be traceable to
+   * the moment somebody chose to make one.
+   */
+  async exportTargetEvidence(session, win, [host, options]) {
+    const target = typeof host === 'string' ? host : '';
+    const opts = (options ?? {}) as EvidenceBundleOptions;
+    const built = await session.buildTargetEvidenceBundle(target, opts);
+    const stamp = new Date(built.summary.generatedAt).toISOString().slice(0, 10);
+    const safeHost = built.summary.host.replace(/[^a-zA-Z0-9._-]+/g, '-');
+    const res = await dialog.showSaveDialog(win() ?? undefined!, {
+      title: built.summary.redacted
+        ? 'Save evidence bundle (redacted)'
+        : 'Save evidence bundle — RAW CAPTURES',
+      defaultPath: `tacnoc-evidence-${safeHost}-${stamp}${built.summary.redacted ? '' : '-RAW'}.zip`,
+      filters: [{ name: 'Evidence bundle', extensions: ['zip'] }],
+    });
+    if (res.canceled || !res.filePath) return null;
+    await fs.writeFile(res.filePath, built.zip);
+    session.recordEvidenceExport(built.summary.host, {
+      redacted: built.summary.redacted,
+      exchanges: built.summary.exchangeCount,
+      findings: built.summary.findingCount,
+      sha256: built.summary.sha256,
+    });
+    return { ...built.summary, path: res.filePath } satisfies EvidenceBundleSummary;
+  },
+
+  /**
+   * Write the session's log tail. Records are redacted by `Logger` before they
+   * ever reach the buffer, so this writes what was already safe to write.
+   */
+  async exportLogs(session, win) {
+    const tail = session.exportLogTail();
+    const at = Date.now();
+    const stamp = new Date(at).toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const res = await dialog.showSaveDialog(win() ?? undefined!, {
+      title: 'Save diagnostic logs',
+      defaultPath: `tacnoc-logs-${stamp}.jsonl`,
+      filters: [{ name: 'JSON Lines', extensions: ['jsonl', 'log', 'txt'] }],
+    });
+    if (res.canceled || !res.filePath) return null;
+    const bytes = Buffer.from(tail.jsonl, 'utf8');
+    await fs.writeFile(res.filePath, bytes);
+    return {
+      path: res.filePath,
+      generatedAt: at,
+      sizeBytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      recordCount: tail.count,
+      droppedCount: tail.dropped,
+    } satisfies LogExportSummary;
+  },
+
+  /** The handoff without writing anything — so the operator can read it first. */
+  async previewTargetHandoff(session, _win, [host, options]) {
+    return session.buildTargetHandoff(
+      typeof host === 'string' ? host : '',
+      (options ?? {}) as EvidenceBundleOptions,
+    );
+  },
+
+  /** Hand a target to the in-app mesh. Every gate `startMeshRun` applies still applies. */
+  async handoffTargetToMesh(session, _win, [host, options]) {
+    return session.handoffTargetToMesh(
+      typeof host === 'string' ? host : '',
+      (options ?? {}) as EvidenceBundleOptions,
+    );
   },
 
   async importProjectFromFile(session, win, [targetDir]) {
@@ -194,6 +279,14 @@ const handlers: Record<string, Handler> = {
   setScope: (s, _w, [scope]) => s.setScope(scope as never),
   getConfig: (s) => s.getConfig(),
   setConfig: (s, _w, [c]) => s.setConfig(c as never),
+
+  // Guided setup. `parseUiPreferences` runs on the way in as well as the way
+  // out: this crosses the bridge from the renderer, so it is untrusted input,
+  // not merely a value that might be stale.
+  getUiPrefs: () => readUiPreferences(),
+  setUiPrefs: (_s, _w, [prefs]) => {
+    writeUiPreferences(parseUiPreferences(prefs));
+  },
 
   getInterceptState: (s) => s.getInterceptState(),
   setInterceptState: (s, _w, [p]) => s.setInterceptState(p as never),
@@ -324,7 +417,11 @@ function assertHandlerParity(): void {
 export function registerIpc(session: TacnocSession, getWindow: () => BrowserWindow | null): void {
   assertHandlerParity();
   ipcMain.handle(IPC_INVOKE, async (_event, method: string, args: unknown[]) => {
-    const handler = handlers[method];
+    // `Object.hasOwn`, not a truthiness check: `handlers` is an object
+    // literal, so 'constructor' and 'toString' would otherwise resolve
+    // through the prototype and reach a dispatch they are not on the
+    // allowlist for.
+    const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined;
     if (!handler) throw new Error(`unknown method: ${method}`);
     try {
       return await handler(session, getWindow, args ?? []);
