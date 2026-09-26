@@ -85,6 +85,58 @@ semantics, rule ordering, exclude-before-include precedence, and the `*.x` →
 `**.x` translation are all untouched, and a fix that would have traded a hang
 for a wider gate was rejected on those grounds.
 
+## [0.6.2] — 2026-09-25
+
+### Fixed — the Repeater was unthrottled, and the emergency stop did not reach it
+
+The Repeater sent at whatever rate the machine could manage, and nothing stopped
+it once a send was under way. Both halves are closed here, and they had to be
+closed together.
+
+The comment at the top of `repeater.ts` had called this path
+_"a MANUAL, single-shot workflow (not automated generation)"_, and that sentence
+is why it went unlimited for so long. **It was not true whenever
+`followRedirects` was on.** One send emits up to `maxRedirects + 1` requests, and
+every destination after the first is chosen by the **remote host** — a redirect
+chain is attacker-influenced request generation originating from this process. A
+hostile or compromised target could walk the Repeater through a chain of hosts as
+fast as the network allowed.
+
+- **Every hop now takes a token** from a shared `TokenBucket` running at
+  `limits.automation.requestsPerSecond` — the same primitive the variation engine
+  uses, not a second implementation. The bucket lives on the `Repeater` rather
+  than on the call, so ten rapid sends are paced as a group instead of each
+  getting its own burst, and the first request of a burst is paced too. The
+  bucket is rebuilt when the configured rate changes, so an operator lowering the
+  rate mid-session is obeyed without reopening the project.
+- **`Repeater.emergencyStopAll()`** mirrors `VariationEngine.emergencyStopAll()`.
+  It cancels hops queued on the limiter **and destroys the socket of a request
+  already on the wire**, then re-arms so the Repeater stays usable afterwards.
+  `Session.emergencyStop()` and `closeProject()` both call it.
+
+**The abort half is not decoration, and shipping the limiter without it would
+have made things worse.** Throttling alone would have left halted work sitting
+queued on tokens, to fire after the operator believed everything had stopped —
+the same defect class as the intercept queue releasing on `forward`, which
+[0.5.2] fixed by dropping instead. `Session.emergencyStop()` has claimed to halt
+_"ALL automated work"_ since it was written; as of this release that is accurate
+rather than aspirational.
+
+Five regression tests cover pacing across sends, pacing across redirect hops, a
+rate lowered mid-session, an in-flight send aborting rather than completing
+silently, and the Repeater still working after a stop. Each was run against the
+unfixed engine first and observed to fail — a regression test that passes on the
+broken code proves nothing.
+
+### Added — `docs/MANUAL.md`
+
+A single in-depth operator manual, assembled from nine independent source-mining
+passes with every command, path, flag, default and config key verified against
+the tree and cited as `file:line`. It documents what is **absent** as well as
+what works: the verified-absences section lists controls the code does not have,
+including the gap this release closes. Version-stamped, because those citations
+drift.
+
 ## [0.6.0] — 2026-09-15
 
 ### Added — guided setup: intake, a readiness checklist, and a skippable walkthrough

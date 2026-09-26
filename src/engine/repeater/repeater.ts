@@ -1,11 +1,28 @@
 /**
- * Repeater — manual request editor backend. Sends a single (optionally
+ * Repeater — manual request editor backend. Sends a (optionally
  * redirect-following) request directly to the origin, measuring timing and
  * size and capturing TLS/connection info. Produces an HttpExchange tagged
  * source="repeater".
  *
- * This is a MANUAL, single-shot workflow (not automated generation), so it is
- * not scope-gated; the resulting exchange still records its in-scope status.
+ * A send is operator-initiated, so it is not scope-gated; the resulting
+ * exchange still records its in-scope status.
+ *
+ * It is NOT, however, single-shot, and the previous version of this comment
+ * claiming otherwise was the reason this path went unthrottled. With
+ * `followRedirects` on, one send emits up to `maxRedirects + 1` requests, and
+ * every destination after the first is chosen by the REMOTE HOST. A redirect
+ * chain is therefore attacker-influenced request generation originating from
+ * this process, and it is rate-limited accordingly:
+ *
+ *   - Every hop, including the first, takes a token from a shared TokenBucket
+ *     running at `limits.automation.requestsPerSecond`. The bucket lives on the
+ *     Repeater, not on the call, so rapid successive sends are throttled too.
+ *   - Every hop is abortable. `emergencyStopAll()` cancels queued hops AND
+ *     destroys the in-flight socket, mirroring VariationEngine.emergencyStopAll().
+ *
+ * The abort path is not optional decoration: throttling without it would make
+ * the emergency stop WORSE, because halted work would sit queued on tokens and
+ * then fire after the operator believed everything had stopped.
  */
 
 import * as http from 'node:http';
@@ -36,6 +53,7 @@ import { bytesToBody } from '../storage/bodyCollector.js';
 import { buildOutboundHeaders, originForm } from '../proxy/proxyUtil.js';
 import { parseRawRequest } from './rawHttp.js';
 import { CookieJar } from './cookieJar.js';
+import { TokenBucket, AbortError } from '../util/rateLimit.js';
 
 export interface RepeaterDeps {
   blobStore: BlobStore;
@@ -64,6 +82,38 @@ const REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
 export class Repeater {
   constructor(private readonly deps: RepeaterDeps) {}
 
+  /**
+   * Shared across sends so N rapid sends are throttled as a group, not each
+   * allowed its own burst. Rebuilt when the configured rate changes, because
+   * `deps.limits` is a live reference to the open project's config and an
+   * operator lowering the rate must take effect without reopening the project.
+   */
+  private bucket: TokenBucket | undefined;
+  private bucketRate = 0;
+
+  /** Re-armed after each stop so the Repeater stays usable afterwards. */
+  private controller = new AbortController();
+
+  private limiter(): TokenBucket {
+    const rate = this.deps.limits.automation.requestsPerSecond;
+    if (!this.bucket || this.bucketRate !== rate) {
+      this.bucket = new TokenBucket(rate);
+      this.bucketRate = rate;
+    }
+    return this.bucket;
+  }
+
+  /**
+   * Abort every queued and in-flight hop. Mirrors
+   * VariationEngine.emergencyStopAll() so the session can halt this path too.
+   * An in-flight send rejects with AbortError; the operator sees a stopped
+   * request rather than a silent completion after the stop.
+   */
+  emergencyStopAll(): void {
+    this.controller.abort();
+    this.controller = new AbortController();
+  }
+
   async send(
     target: { scheme: Scheme; host: string; port: number; raw: string },
     options: RepeaterOptions,
@@ -72,6 +122,9 @@ export class Repeater {
     const started = Date.now();
     const parsed = parseRawRequest(target.raw);
     const redirects: RedirectHop[] = [];
+    // Captured once: emergencyStopAll() swaps in a fresh controller, and this
+    // send must keep observing the signal it started under.
+    const signal = this.controller.signal;
 
     let scheme = target.scheme;
     let host = target.host;
@@ -102,6 +155,11 @@ export class Repeater {
       const outgoing = applyIdentity(headers, this.deps.getEngagement?.());
       sentHeaders = outgoing;
 
+      // Throttle EVERY hop, first included. Placed before the send rather than
+      // after it so the very first request of a burst is also paced, and inside
+      // the redirect loop so a server-controlled chain cannot outrun the limit.
+      await this.limiter().take(signal);
+
       const single = await this.sendOnce(
         scheme,
         host,
@@ -111,6 +169,7 @@ export class Repeater {
         outgoing,
         body,
         options.timeoutMs,
+        signal,
       );
       if (single.tls) tls = single.tls;
 
@@ -206,6 +265,7 @@ export class Repeater {
     headers: HttpHeader[],
     body: Buffer,
     timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<SingleResponse> {
     const started = Date.now();
     const outHeaders = buildOutboundHeaders(headers);
@@ -219,6 +279,8 @@ export class Repeater {
     };
 
     return new Promise<SingleResponse>((resolve, reject) => {
+      if (signal?.aborted) return reject(new AbortError());
+
       const req =
         scheme === 'https'
           ? https.request({
@@ -252,13 +314,25 @@ export class Repeater {
         }
       });
 
+      // Destroy the socket on abort so an emergency stop halts a request that
+      // is already on the wire, not merely the ones still queued behind it.
+      const onAbort = (): void => {
+        req.destroy(new AbortError());
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      const cleanup = (): void => signal?.removeEventListener('abort', onAbort);
+
       req.on('timeout', () => req.destroy(new Error('request timeout')));
-      req.on('error', reject);
+      req.on('error', (err) => {
+        cleanup();
+        reject(err);
+      });
       req.on('response', (res) => {
         const ttfbMs = Date.now() - started;
         const chunks: Buffer[] = [];
         res.on('data', (c) => chunks.push(c as Buffer));
-        res.on('end', () =>
+        res.on('end', () => {
+          cleanup();
           resolve({
             statusCode: res.statusCode ?? 0,
             statusMessage: res.statusMessage ?? '',
@@ -267,8 +341,8 @@ export class Repeater {
             body: Buffer.concat(chunks),
             ttfbMs,
             ...(tlsInfo ? { tls: tlsInfo } : {}),
-          }),
-        );
+          });
+        });
       });
 
       if (body.length) req.write(body);
