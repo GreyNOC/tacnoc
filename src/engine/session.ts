@@ -307,6 +307,7 @@ export class TacnocSession extends EventEmitter {
   async closeProject(): Promise<void> {
     if (this.proxy) await this.stopProxy();
     if (this.variation) this.variation.emergencyStopAll();
+    this.repeater?.emergencyStopAll();
     this.mesh.stopAll();
     this.project?.close();
     this.project = undefined;
@@ -763,6 +764,10 @@ export class TacnocSession extends EventEmitter {
    */
   emergencyStop(): void {
     this.variation?.emergencyStopAll();
+    // The repeater follows server-chosen redirects, so a send in flight is
+    // automated traffic this control is supposed to cover. It was omitted until
+    // 0.6.1 while the docstring below already claimed "ALL automated work".
+    this.repeater?.emergencyStopAll();
     // DROP, not forward. A held request has not reached the target yet, so
     // releasing the queue as `forward` made the one control whose entire job is
     // "stop touching the target" deliver every queued request to it — while the
